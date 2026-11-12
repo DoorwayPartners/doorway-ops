@@ -95,12 +95,21 @@ test('Queue mutations and intake row appends bust the boot cache', () => {
   assert.match(q, /send_failed[\s\S]*bustBootCache_\(\)/);
 });
 
-test('Frontend: sessionStorage is cleared on Sign out and auth errors; demo mode does not cache', () => {
+test('Frontend: localStorage is cleared on Sign out and auth errors; demo mode does not cache', () => {
   const app = fs.readFileSync(path.join(__dirname, '../docs/app.js'), 'utf8');
   assert.match(app, /var BOOT_PREFIX = 'doorway-ops-boot:'/);
   assert.match(app, /function bootCacheKey\(email, role\)/);
   assert.match(app, /function clearBootCache\(/);
   assert.match(app, /if \(DEMO\) return;/);
+  // Persistent SWR cache lives in localStorage so a new tab can render the last HUD instantly
+  assert.match(app, /localStorage\.setItem\(bootCacheKey/);
+  assert.match(app, /localStorage\.getItem\(k\)/);
+  assert.doesNotMatch(app, /sessionStorage\.setItem\(bootCacheKey/);
+  assert.doesNotMatch(app, /sessionStorage\.getItem\(/);
+  // Leftover V3.1 sessionStorage keys are swept on load and whenever the cache is cleared
+  assert.match(app, /function purgeLegacySessionBootCache\(/);
+  assert.match(app, /sweepBootKeys\(sessionStorage\)/);
+  assert.match(app, /purgeLegacySessionBootCache\(\);\s*if \(DEMO\) startDemo\(\)/);
   // Sign-out handler clears before reload
   const so = app.indexOf("getElementById('signout').addEventListener('click'");
   const soEnd = app.indexOf('location.reload()', so);
@@ -111,9 +120,9 @@ test('Frontend: sessionStorage is cleared on Sign out and auth errors; demo mode
   assert.match(app, /if \(d\.status === 401 \|\| d\.status === 403\) \{[\s\S]*clearBootCache\(\)/);
   // Cached payload is only reused when the email matches; role mismatch clears
   assert.match(app, /d\.role !== cached\.role[\s\S]*clearBootCache\(\)/);
-  // Demo start path never writes sessionStorage
+  // Demo start path never writes localStorage or sessionStorage
   const demo = app.slice(app.indexOf('function startDemo()'), app.indexOf('if (DEMO) startDemo()'));
-  assert.ok(!/sessionStorage|writeBootCache|readBootCache/.test(demo), 'startDemo must not touch the live cache');
+  assert.ok(!/sessionStorage|localStorage|writeBootCache|readBootCache/.test(demo), 'startDemo must not touch the live cache');
   // Combined boot queue is applied on Owner render
   assert.match(app, /applyBootQueue\(d\)/);
 });

@@ -205,32 +205,41 @@
   }
   function queueApi(payload) { return DEMO ? Promise.resolve(demoQueueAction(payload)) : apiPost(payload); }
 
-  // V3.1 stale-while-revalidate: last authenticated dashboard + queue in sessionStorage.
+  // V3.4 stale-while-revalidate: last authenticated dashboard + queue in localStorage
+  // so a new tab can render the last HUD in <150ms, then sync in the background.
   // Key includes the signed-in email + role. Never written in demo mode.
+  // Cleared immediately on Sign out, 401/403, and email/role mismatch.
   var BOOT_PREFIX = 'doorway-ops-boot:';
   function bootCacheKey(email, role) {
     return BOOT_PREFIX + String(email || '').trim().toLowerCase() + ':' + String(role || '');
   }
-  function clearBootCache() {
+  function sweepBootKeys(store) {
     try {
       var remove = [];
-      for (var i = 0; i < sessionStorage.length; i++) {
-        var k = sessionStorage.key(i);
+      for (var i = 0; i < store.length; i++) {
+        var k = store.key(i);
         if (k && k.indexOf(BOOT_PREFIX) === 0) remove.push(k);
       }
-      remove.forEach(function (k) { sessionStorage.removeItem(k); });
+      remove.forEach(function (k) { store.removeItem(k); });
     } catch (e) {}
+  }
+  function clearBootCache() {
+    sweepBootKeys(localStorage);
+    sweepBootKeys(sessionStorage);
+  }
+  function purgeLegacySessionBootCache() {
+    sweepBootKeys(sessionStorage);
   }
   function readBootCache(email) {
     if (DEMO || !email) return null;
     var prefix = BOOT_PREFIX + String(email).trim().toLowerCase() + ':';
     try {
-      for (var i = 0; i < sessionStorage.length; i++) {
-        var k = sessionStorage.key(i);
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
         if (!k || k.indexOf(prefix) !== 0) continue;
-        var obj = JSON.parse(sessionStorage.getItem(k));
+        var obj = JSON.parse(localStorage.getItem(k));
         if (obj && obj.status === 200 && obj.me && String(obj.me.email).toLowerCase() === String(email).trim().toLowerCase()) return obj;
-        sessionStorage.removeItem(k);
+        localStorage.removeItem(k);
       }
     } catch (e) {}
     return null;
@@ -247,7 +256,7 @@
     } else if (dash.role !== 'Owner') {
       delete stored.queue;
     }
-    try { sessionStorage.setItem(bootCacheKey(dash.me.email, dash.role), JSON.stringify(stored)); } catch (e) {}
+    try { localStorage.setItem(bootCacheKey(dash.me.email, dash.role), JSON.stringify(stored)); } catch (e) {}
   }
   function applyBootQueue(d) {
     if (d && d.role === 'Owner' && d.queue && Array.isArray(d.queue.items) && d.queue.counts) {
@@ -691,5 +700,6 @@
     document.head.appendChild(s);
   }
 
+  purgeLegacySessionBootCache();
   if (DEMO) startDemo(); else startLive();
 })();

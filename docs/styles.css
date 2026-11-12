@@ -9,6 +9,7 @@ main{flex:1;padding:12px;display:flex;flex-direction:column;gap:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
 .card h3{margin:0 0 10px;font-size:15px}.card h4{margin:14px 0 6px;font-size:13px;color:var(--muted);font-weight:600}
 .center{text-align:center}.center #gsi-button{display:flex;justify-content:center;margin:14px 0}
+#gsi-button svg{width:20px;height:20px;max-width:20px}
 .muted{color:var(--muted)}.small{font-size:12.5px}.hidden{display:none!important}
 .grid{display:grid;gap:8px}.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr 1fr}
 .stat{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:10px;text-align:center;min-width:0}
@@ -51,6 +52,7 @@ p.bad{color:var(--bad)}
 .hud-tile{text-align:center;min-width:0}
 .hud-v{font-size:17px;font-weight:700;color:#fff;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hud-l{font-size:11px;color:#94a3b8;line-height:1.2;margin-top:2px}
+.hud-strip .stat-l,.hud-strip .hud-l{font-size:10px;line-height:1.15}
 .hud-tile.good .hud-v{color:#34d399}.hud-tile.warn .hud-v{color:#fbbf24}.hud-tile.bad .hud-v{color:#f87171}.hud-tile.info .hud-v{color:#93c5fd}
 
 /* Segmented sub-tabs + filter pills */
