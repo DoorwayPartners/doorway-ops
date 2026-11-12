@@ -31,6 +31,27 @@
     if (!rows || !rows.length) return empty(none || 'Nothing here.');
     return el('ul', { class: 'list' }, rows.map(function (r) { return el('li', null, render(r)); }));
   }
+  function collapseList(rows, render, none, limit) {
+    limit = limit == null ? 5 : limit;
+    var wrap = el('div', { class: 'clist' });
+    var expanded = false;
+    function draw() {
+      wrap.textContent = '';
+      var rowsArr = rows || [];
+      var slice = expanded ? rowsArr : rowsArr.slice(0, limit);
+      wrap.appendChild(list(slice, render, none));
+      if (rowsArr.length > limit) {
+        wrap.appendChild(el('button', {
+          type: 'button',
+          class: 'btn line clist-toggle',
+          text: expanded ? 'Show top ' + limit : 'View all (' + rowsArr.length + ')',
+          onclick: function () { expanded = !expanded; draw(); }
+        }));
+      }
+    }
+    draw();
+    return wrap;
+  }
   function line(main, sub, right, tone) {
     return [el('div', { class: 'li-main' }, [el('div', { text: main }), sub ? el('div', { class: 'muted small', text: sub }) : null]),
       right != null ? el('span', { class: 'pill ' + (tone || ''), text: String(right) }) : null];
@@ -41,6 +62,7 @@
     fill.style.width = p + '%'; // CSSOM, allowed by the CSP (inline style attributes are not)
     return el('div', { class: 'bar' }, [fill]);
   }
+  function dashGrid(kids) { return el('div', { class: 'dash-grid' }, kids); }
 
   // ---------- shared sections ----------
   function pipelineCard(p) {
@@ -56,7 +78,7 @@
   function leaderboardCard(title, rows, rules) {
     return card(title, [
       el('p', { class: 'muted small', text: 'Pace target: ' + rules.dealsPerDay + ' deals/day (Mon–Sat) month to date' }),
-      list(rows, function (r) {
+      collapseList(rows, function (r) {
         return [el('div', { class: 'li-main' }, [
           el('div', { class: 'row-between' }, [el('span', { text: r.rep }), el('span', { class: 'small', text: r.deals + ' / ' + r.target })]),
           bar(r.pacePct),
@@ -66,19 +88,19 @@
     ]);
   }
   function missingCard(rows, showAddress) {
-    return card('Missing orders (2-report rule)', [list(rows, function (m) {
+    return card('Missing orders (2-report rule)', [collapseList(rows, function (m) {
       var where = showAddress && m.Address ? m.Address + ', ' + (m.City || '') : (m.City || 'Unknown town');
       return line(where, (m['SR assigned to'] || '') + ' · ' + (m['SR status'] || '') + ' · since ' + (m['SR status date (Date Updated, ET)'] || ''), (m['Reports since pin'] || '?') + ' reports', 'bad');
     }, 'No missing orders.')]);
   }
   function day14Card(rows) {
-    return card('Day-14 first-bill check-ins', [list(rows, function (d) {
+    return card('Day-14 first-bill check-ins', [collapseList(rows, function (d) {
       var who = d.Customer_Name ? d.Customer_Name + ' · ' : '';
       return line(who + (d.Service_Address || d.City || ''), d.Rep_Name + ' · installed ' + d.Install_Date, d.Day14_Date, 'warn');
     }, 'No check-ins due today.')]);
   }
   function permitsCard(rows, title) {
-    return card(title || 'Permits & knock hours', [list(rows, function (p) {
+    return card(title || 'Permits & knock hours', [collapseList(rows, function (p) {
       var exp = p.Days_To_Expiry !== '' && p.Days_To_Expiry != null ? 'expires in ' + p.Days_To_Expiry + 'd' : '';
       var tone = String(p.Status).toLowerCase().indexOf('unknown') === 0 ? 'warn' : (p.Expiring_14d === 'Y' ? 'bad' : 'good');
       return line(p.Town + ', ' + p.State, [p.Allowed_Knock_Hours ? 'Knock ' + p.Allowed_Knock_Hours : 'Knock hours unknown', p.Civil_Dusk_Cutoff ? 'dusk ' + p.Civil_Dusk_Cutoff : '', exp].filter(Boolean).join(' · '), p.Expiring_14d === 'Y' ? 'Renew soon' : (p.Status || '—'), tone);
@@ -88,12 +110,12 @@
     return card(title || 'My wallet', [
       grid([stat('Pending', usd(w.pending.amount), w.pending.count + ' orders'), stat('Installed', usd(w.installed.amount), w.installed.count + ' awaiting carrier', 'warn'), stat('Cleared', usd(w.cleared.amount), w.cleared.count + ' payable', 'good')], 3),
       el('h4', { text: 'Clawback countdown (' + rules.clawbackDays + ' days from install)' }),
-      list(w.clawbackWatch, function (c) { return line(c.Order_ID, 'installed ' + c.Install_Date, c.daysLeft + 'd left', c.daysLeft <= 30 ? 'warn' : ''); }, 'No installed orders in the clawback window.')
+      collapseList(w.clawbackWatch, function (c) { return line(c.Order_ID, 'installed ' + c.Install_Date, c.daysLeft + 'd left', c.daysLeft <= 30 ? 'warn' : ''); }, 'No installed orders in the clawback window.')
     ]);
   }
 
   // ---------- role screens ----------
-  function renderExec(d) {
+  function renderMoney(d) {
     var f = d.financials;
     var kids = [
       pipelineCard(d.pipeline),
@@ -102,17 +124,26 @@
         el('p', { class: 'muted small', text: 'Installed (not yet cleared) spread: ' + usd(f.netSpreadInstalled) + ' · gross on installed: ' + usd(f.grossAgencyRevInstalled) })
       ]),
       card('Exceptions & holds', [
-        list(d.exceptions, function (e) { return line(e.Order_ID + ' · ' + e.Rep_Name, e.Customer_Name + ' · ' + e.C2C_Status, e.Exception_Reason, 'bad'); }, 'No payroll exceptions.'),
+        collapseList(d.exceptions, function (e) { return line(e.Order_ID + ' · ' + e.Rep_Name, e.Customer_Name + ' · ' + e.C2C_Status, e.Exception_Reason, 'bad'); }, 'No payroll exceptions.'),
         el('h4', { text: 'Compliance holds (' + d.holds.length + ')' }),
-        list(d.holds, function (h) { return line(h.rep, 'Missing: ' + (h.missing.join(', ') || '—'), 'HOLD', 'bad'); }, 'Everyone is green.')
-      ]),
-      leaderboardCard('Pace leaderboard', d.leaderboard, d.rules),
+        collapseList(d.holds, function (h) { return line(h.rep, 'Missing: ' + (h.missing.join(', ') || '—'), 'HOLD', 'bad'); }, 'Everyone is green.')
+      ])
+    ];
+    if (!d.capabilities.canReleasePayouts) kids.unshift(el('div', { class: 'note', text: 'Admin view: full visibility. Payout release is Owner-only.' }));
+    return kids;
+  }
+  function renderTeam(d) {
+    return [leaderboardCard('Pace leaderboard', d.leaderboard, d.rules)];
+  }
+  function renderField(d) {
+    return [
       missingCard(d.missingOrders, true),
       day14Card(d.day14),
       permitsCard(d.permits.filter(function (p) { return p.Expiring_14d === 'Y' || /unknown/i.test(p.Status); }), 'Permits: expiring ≤14d or unknown')
     ];
-    if (!d.capabilities.canReleasePayouts) kids.unshift(el('div', { class: 'note', text: 'Admin view: full visibility. Payout release is Owner-only.' }));
-    return kids;
+  }
+  function renderExec(d) {
+    return renderMoney(d).concat(renderTeam(d), renderField(d));
   }
   function renderManager(d) {
     return [
@@ -142,15 +173,17 @@
       permitsCard(d.permits),
       day14Card(d.day14),
       d.missingOrders.length ? missingCard(d.missingOrders, true) : null,
-      card('My scorecard', [list(d.scorecard, function (s) {
+      card('My scorecard', [collapseList(d.scorecard, function (s) {
         return line(s.Date + ' · graded by ' + s.Grader, 'Approach ' + s.Approach_Tonality + ' · Rebuttal ' + s.Rebuttal_Composure + ' · Pin/Dusk ' + s.Pin_Note_Dusk + ' · RepCard ' + s['RepCard_Send_Rate %'], s.Roleplay_Pass === 'Y' ? 'PASS' : 'RETRY', s.Roleplay_Pass === 'Y' ? 'good' : 'warn');
       }, 'No scorecards yet.')])
     ].filter(Boolean);
   }
 
-  // ---------- V2: Owner Priority Queue (Owner role only) ----------
+  // ---------- V2/V3: Owner Priority Queue (Owner role only) ----------
   var view = 'queue'; // Owner default landing tab
   var lastDash = null;
+  var lastQueue = null; // { items, counts } from GET_QUEUE — never taken from the dashboard payload
+  var queueFilter = 'all';
   var PRI_TONE = { 'P1-URGENT': 'bad', 'P2-OPS': 'warn', 'P3-ADMIN': 'info' };
   var PRI_LABEL = { 'P1-URGENT': 'P1 Urgent', 'P2-OPS': 'P2 Field Ops', 'P3-ADMIN': 'P3 Admin' };
 
@@ -177,30 +210,104 @@
     document.body.appendChild(t);
     setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 3500);
   }
-  function viewTabs() {
-    function b(label, v) {
-      return el('button', { type: 'button', class: 'vtab' + (view === v ? ' active' : ''), text: label, onclick: function () { view = v; render(lastDash); } });
+
+  function prettyCat(c) { return String(c || '').replace(/_/g, ' '); }
+  function matchFilter(it) {
+    if (queueFilter === 'all') return true;
+    if (queueFilter === 'p1') return it.Priority === 'P1-URGENT';
+    if (queueFilter === 'escalations') return /escalat/i.test(it.Category || '');
+    if (queueFilter === 'recruiting') return /recruit/i.test(it.Category || '');
+    return true;
+  }
+  function loadQueue() {
+    return queueApi({ action: 'GET_QUEUE' }).then(function (q) {
+      if (q.status === 200) {
+        lastQueue = q;
+        updateHudP1(q.counts.p1);
+        updateQueueBadge(q.counts.total);
+      }
+      return q;
+    });
+  }
+  function updateHudP1(n) {
+    var node = document.getElementById('hud-p1');
+    if (node) node.textContent = String(n);
+  }
+  function updateQueueBadge(n) {
+    var node = document.getElementById('queue-tab-label');
+    if (node) node.textContent = 'Queue (' + n + ')';
+  }
+  function hudTile(label, value, tone, valueId) {
+    var v = el('div', { class: 'hud-v', text: String(value) });
+    if (valueId) v.id = valueId;
+    return el('div', { class: 'hud-tile ' + (tone || '') }, [v, el('div', { class: 'hud-l', text: label })]);
+  }
+  function mountHud(d) {
+    var host = document.getElementById('hud-host');
+    if (!host) return;
+    host.textContent = '';
+    if (!d || (d.role !== 'Owner' && d.role !== 'Admin')) {
+      host.classList.add('hidden');
+      return;
     }
-    return el('div', { class: 'vtabs' }, [b('Priority Queue', 'queue'), b('Dashboard', 'dash')]);
+    host.classList.remove('hidden');
+    var f = d.financials || {};
+    var p = d.pipeline || {};
+    var holds = ((d.exceptions && d.exceptions.length) || 0) + ((d.holds && d.holds.length) || 0);
+    var p1 = (d.role === 'Owner' && lastQueue && lastQueue.counts) ? String(lastQueue.counts.p1) : '—';
+    var pipe = (p.installed != null ? p.installed : '—') + ' / ' + (p.written != null ? p.written : '—');
+    host.appendChild(el('div', { class: 'hud-strip' }, [
+      hudTile('P1 Urgent', p1, p1 !== '—' && Number(p1) > 0 ? 'bad' : '', d.role === 'Owner' ? 'hud-p1' : null),
+      hudTile('Net Spread (Cleared)', usd(f.netSpreadCleared), 'good'),
+      hudTile('Installed / Pipeline', pipe, ''),
+      hudTile('Exceptions & Holds', holds, holds ? 'bad' : 'good')
+    ]));
+  }
+
+  function viewTabs() {
+    function b(label, v, labelId) {
+      var attrs = { type: 'button', class: 'vtab' + (view === v ? ' active' : ''), text: label, onclick: function () { view = v; render(lastDash); } };
+      var n = el('button', attrs);
+      if (labelId) n.id = labelId;
+      return n;
+    }
+    var qn = lastQueue && lastQueue.counts ? lastQueue.counts.total : '…';
+    return el('div', { class: 'subtabs' }, [
+      b('Queue (' + qn + ')', 'queue', 'queue-tab-label'),
+      b('Money & Exceptions', 'money'),
+      b('Team Pace', 'team'),
+      b('Field & Permits', 'field')
+    ]);
+  }
+  function filterPills(onChange) {
+    function b(label, key) {
+      return el('button', { type: 'button', class: queueFilter === key ? 'active' : '', text: label, onclick: function () { queueFilter = key; onChange(); } });
+    }
+    return el('div', { class: 'filter-pills' }, [
+      b('All', 'all'), b('P1 Urgent', 'p1'), b('Escalations', 'escalations'), b('Recruiting', 'recruiting')
+    ]);
   }
   function renderQueueView() {
     var box = el('div', { class: 'qwrap' }, [card('Loading queue…', [el('div', { class: 'skeleton' })])]);
     main.appendChild(box);
-    queueApi({ action: 'GET_QUEUE' }).then(function (q) {
+    function paint(q) {
       box.textContent = '';
       if (q.status !== 200) { box.appendChild(card('Queue unavailable', [el('p', { class: 'muted', text: 'Could not load the queue (' + (q.error || q.status) + ').' })])); return; }
-      var c = q.counts;
-      box.appendChild(grid([stat('P1 Urgent', c.p1, null, 'bad'), stat('P2 Field Ops', c.p2, null, 'warn'), stat('P3 Admin', c.p3, null, 'info')], 3));
-      if (!q.items.length) { box.appendChild(card(null, [empty('Nothing waiting for approval.')], 'center')); return; }
-      q.items.forEach(function (it) { box.appendChild(queueCard(it)); });
-    }).catch(function () {
+      box.appendChild(filterPills(function () { paint(q); }));
+      var items = q.items.filter(matchFilter);
+      if (!items.length) { box.appendChild(card(null, [empty('Nothing waiting for approval.')], 'center')); return; }
+      items.forEach(function (it) { box.appendChild(queueRow(it)); });
+    }
+    if (lastQueue && lastQueue.status === 200) paint(lastQueue);
+    loadQueue().then(function (q) { paint(q); }).catch(function () {
       box.textContent = '';
       box.appendChild(card('Connection problem', [el('p', { class: 'muted', text: 'Could not reach the Doorway Ops server.' })]));
     });
   }
   function field(label, node) { return el('label', { class: 'field' }, [el('span', { class: 'small muted', text: label }), node]); }
-  function queueCard(it) {
+  function queueRow(it) {
     var editing = false;
+    var open = it.Priority === 'P1-URGENT';
     var inTo = el('input', { type: 'email', multiple: 'multiple', value: it.Draft_To || '' });
     var inCc = el('input', { type: 'text', value: it.Draft_Cc || '' });
     var inSubj = el('input', { type: 'text', value: it.Draft_Subject || '' });
@@ -213,8 +320,13 @@
     var btnSnooze = el('button', { type: 'button', class: 'btn line', text: 'Snooze' });
     var btnDismiss = el('button', { type: 'button', class: 'btn line', text: 'Dismiss' });
     var buttons = [btnSend, btnEdit, btnSnooze, btnDismiss];
-    var node = card(null, [
-      el('div', { class: 'row-between' }, [el('span', { class: 'pill ' + (PRI_TONE[it.Priority] || ''), text: PRI_LABEL[it.Priority] || it.Priority || '—' }), el('span', { class: 'small muted', text: (it.Category || '') + ' · ' + (it.Queue_ID || '') })]),
+    var snippet = [it.Rep_Or_Sender || '', prettyCat(it.Category), it.Context_Summary || ''].filter(Boolean).join(' · ');
+    var head = el('button', { type: 'button', class: 'qrow-head' }, [
+      el('span', { class: 'pill ' + (PRI_TONE[it.Priority] || ''), text: PRI_LABEL[it.Priority] || it.Priority || '—' }),
+      el('span', { class: 'qrow-title', text: snippet }),
+      el('span', { class: 'qrow-chevron', text: '▾' })
+    ]);
+    var body = el('div', { class: 'qrow-body' }, [
       el('div', { class: 'qfrom', text: it.Rep_Or_Sender || '' }),
       el('p', { class: 'small', text: it.Context_Summary || '' }),
       el('div', { class: 'small muted', text: 'To: ' + (it.Draft_To || '— (add in Edit Draft)') + (it.Draft_Cc ? ' · Cc: ' + it.Draft_Cc : '') }),
@@ -222,10 +334,20 @@
       el('details', null, [el('summary', { class: 'small', text: 'Draft: ' + (it.Draft_Subject || '(no subject)') }), el('div', { class: 'pre small', text: it.Draft_Body || '(no draft yet)' })]),
       editBox, msg,
       el('div', { class: 'actions' }, buttons)
-    ], 'qcard');
+    ]);
+    var node = el('section', { class: 'card qrow qcard' + (open ? ' open' : '') }, [
+      head,
+      el('div', { class: 'qrow-body-wrap' }, [body])
+    ]);
+    if (!open) body.classList.add('hidden');
+    head.addEventListener('click', function () {
+      open = !open;
+      node.classList.toggle('open', open);
+      body.classList.toggle('hidden', !open);
+    });
     function busy(on) { buttons.forEach(function (b) { b.disabled = on; }); }
     function say(text, tone) { msg.textContent = text; msg.className = 'small ' + (tone || ''); }
-    function done(text) { node.classList.add('gone'); toast(text, 'good'); setTimeout(function () { render(lastDash); }, 600); }
+    function done(text) { node.classList.add('gone'); toast(text, 'good'); setTimeout(function () { lastQueue = null; render(lastDash); }, 600); }
     btnEdit.addEventListener('click', function () {
       editing = !editing; editBox.classList.toggle('hidden', !editing); btnEdit.textContent = editing ? 'Cancel edit' : 'Edit Draft';
     });
@@ -267,15 +389,22 @@
     lastDash = d;
     main.textContent = '';
     document.getElementById('whoami').textContent = d.me.name + ' · ' + d.role + ' · as of ' + d.asOf;
+    mountHud(d);
     if (d.role === 'Owner') { // queue tab exists for the Owner role only; the API enforces it too
       main.appendChild(viewTabs());
       if (view === 'queue') return renderQueueView();
+      var ownerKids = view === 'team' ? renderTeam(d) : view === 'field' ? renderField(d) : renderMoney(d);
+      main.appendChild(dashGrid(ownerKids));
+      if (view !== 'queue') loadQueue().catch(function () {});
+      return;
     }
     var kids = d.role === 'Rep' ? renderRep(d) : d.role === 'Manager' ? renderManager(d) : renderExec(d);
-    kids.forEach(function (k) { main.appendChild(k); });
+    if (d.role === 'Admin') main.appendChild(dashGrid(kids));
+    else kids.forEach(function (k) { main.appendChild(k); });
   }
   function showError(title, msg) {
     main.textContent = '';
+    mountHud(null);
     main.appendChild(card(title, [el('p', { class: 'muted', text: msg })], 'center'));
   }
 

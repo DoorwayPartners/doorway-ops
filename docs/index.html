@@ -12,14 +12,17 @@
 </head>
 <body>
   <div id="app" class="shell">
-    <header class="topbar">
-      <div>
-        <h1>Doorway Ops</h1>
-        <p id="whoami" class="muted small">Command Center</p>
-      </div>
-      <button id="signout" class="btn ghost hidden" type="button">Sign out</button>
-    </header>
-    <div id="demo-banner" class="demo-banner hidden"></div>
+    <div class="sticky-stack">
+      <header class="topbar">
+        <div>
+          <h1>Doorway Ops</h1>
+          <p id="whoami" class="muted small">Command Center</p>
+        </div>
+        <button id="signout" class="btn ghost hidden" type="button">Sign out</button>
+      </header>
+      <div id="hud-host"></div>
+      <div id="demo-banner" class="demo-banner hidden"></div>
+    </div>
     <main id="main">
       <section id="signin" class="card center">
         <h2>Sign in</h2>
@@ -28,7 +31,7 @@
         <p id="signin-msg" class="muted small"></p>
       </section>
     </main>
-    <footer class="foot muted small">V2 · Data from Doorway Partners sheets</footer>
+    <footer class="foot muted small">V3 · Data from Doorway Partners sheets</footer>
   </div>
   <script src="config.js"></script>
   <script src="core.js"></script>
