@@ -1,0 +1,12 @@
+{
+  "name": "doorway-ops",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Doorway Partners Ops Command Center (ops.doorwaypartners.com) — static site + read-only Apps Script API",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs && node --test test/*.test.js",
+    "preview": "node scripts/build.mjs && python3 -m http.server 8787 --directory docs",
+    "screens": "node scripts/build.mjs && bash scripts/screens.sh"
+  }
+}
