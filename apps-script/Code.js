@@ -111,22 +111,12 @@ function loadData_(raw, props, role) {
   }
 }
 
-/** Read-only Sheets REST read (keeps the script on the spreadsheets.readonly scope). */
-function sheetValues_(spreadsheetId, a1) {
-  var url = 'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) +
-    '/values/' + encodeURIComponent(a1) +
-    '?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING';
-  var res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
-  if (res.getResponseCode() === 400 || res.getResponseCode() === 404) return null;
-  if (res.getResponseCode() !== 200) throw new Error('Sheets read failed (' + res.getResponseCode() + ') for ' + a1);
-  return JSON.parse(res.getContentText()).values || [];
-}
-
 /** Read a tab as objects. headerRow is 1-based (Payroll_Exceptions uses row 3). */
 function readTab_(spreadsheetId, tabName, headerRow) {
   if (!spreadsheetId) throw new Error('Missing sheet id for ' + tabName);
-  var values = sheetValues_(spreadsheetId, "'" + String(tabName).replace(/'/g, "''") + "'");
-  if (values === null) throw new Error('Missing tab ' + tabName);
+  var sh = SpreadsheetApp.openById(spreadsheetId).getSheetByName(tabName);
+  if (!sh) throw new Error('Missing tab ' + tabName);
+  var values = sh.getDataRange().getValues();
   var h = (headerRow || 1) - 1;
   var headers = (values[h] || []).map(function (x) { return String(x).trim(); });
   var out = [];
@@ -134,8 +124,7 @@ function readTab_(spreadsheetId, tabName, headerRow) {
     var obj = {}, any = false;
     for (var c = 0; c < headers.length; c++) {
       if (!headers[c]) continue;
-      var v = (values[r] || [])[c];
-      if (v === undefined) v = '';
+      var v = values[r][c];
       if (v instanceof Date) v = Utilities.formatDate(v, TZ, 'yyyy-MM-dd');
       obj[headers[c]] = v;
       if (v !== '' && v !== null) any = true;
@@ -146,9 +135,9 @@ function readTab_(spreadsheetId, tabName, headerRow) {
 }
 
 function readNamedRange_(spreadsheetId, name, columns) {
-  var rows = sheetValues_(spreadsheetId, name);
-  if (!rows) return [];
-  return rows.filter(function (row) { return row[0]; }).map(function (row) {
+  var rng = SpreadsheetApp.openById(spreadsheetId).getRangeByName(name);
+  if (!rng) return [];
+  return rng.getValues().filter(function (row) { return row[0]; }).map(function (row) {
     var o = {};
     columns.forEach(function (c, i) { var v = row[i]; o[c] = v instanceof Date ? Utilities.formatDate(v, TZ, 'yyyy-MM-dd') : v; });
     return o;
