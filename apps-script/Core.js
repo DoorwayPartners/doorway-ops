@@ -454,6 +454,234 @@ var DoorwayCore = (function () {
     return !!s && (rows || []).some(function (r) { return String((r && r.Source_Thread_ID) || '').trim() === s; });
   }
 
+
+  // ---------- V3.2: Campaign_Rules patches + Learning_Log diffs (pure) ----------
+  var CAMPAIGN_RULE_FIELDS = [
+    'Campaign_ID', 'Active_Flag', 'Gross_Agency_Rev_Default', 'Rep_Base_Comm',
+    'Certified_Bonus_Comm', 'Pod_Lead_Override', 'Clawback_Days', 'Hold_Back_Pct',
+    'Tier_Overrides_JSON'
+  ];
+  var PAYROLL_LEDGER_COLUMNS = [
+    'Order_ID', 'Campaign_ID', 'Rep_Name', 'Install_Date', 'Cancel_Date',
+    'Carrier_Payout_Cleared', 'Base_Comm', 'Certified_Bonus', 'Override_Comm',
+    'Clawback_Deduction', 'Hold_Back_Amt', 'Net_Order_Payout', 'Payout_Eligible',
+    'Hold_Reason'
+  ];
+  var LEARNING_LOG_COLUMNS = [
+    'Timestamp', 'Source_Module', 'Entity_ID', 'Before_Value', 'After_Value',
+    'Pattern_Tag', 'Applied_To_Rules'
+  ];
+  var LEARNING_SOURCE_MODULES = ['QUEUE_EDIT', 'PAYROLL_PATCH', 'RULE_UPDATE'];
+  var CAMPAIGN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_]{0,63}$/;
+  var CAMPAIGN_RULE_ALIASES = {
+    campaign_id: 'Campaign_ID', campaignid: 'Campaign_ID',
+    active_flag: 'Active_Flag', active: 'Active_Flag',
+    gross_agency_rev_default: 'Gross_Agency_Rev_Default',
+    gross_agency_rev: 'Gross_Agency_Rev_Default',
+    rep_base_comm: 'Rep_Base_Comm', base_comm: 'Rep_Base_Comm',
+    certified_bonus_comm: 'Certified_Bonus_Comm', certified_bonus: 'Certified_Bonus_Comm',
+    pod_lead_override: 'Pod_Lead_Override',
+    clawback_days: 'Clawback_Days', clawback_window_days: 'Clawback_Days',
+    hold_back_pct: 'Hold_Back_Pct', holdback_pct: 'Hold_Back_Pct',
+    reserve_holdback_pct: 'Hold_Back_Pct',
+    tier_overrides_json: 'Tier_Overrides_JSON', tier_overrides: 'Tier_Overrides_JSON'
+  };
+  var PATCH_META_KEYS = {
+    idtoken: true, action: true, patch: true, fields: true, confirm: true,
+    campaignid: true, campaign_id: true
+  };
+
+  function aliasKey(s) {
+    return String(s || '').trim().toLowerCase().replace(/[%$]/g, '').replace(/[\s-]+/g, '_');
+  }
+  function isBlankPatchValue(v) {
+    return v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
+  }
+  function parseCurrencyField(v) {
+    if (typeof v === 'number') {
+      if (!isFinite(v) || v < 0) return { error: 'bad_currency' };
+      return { value: v };
+    }
+    var s = String(v).trim();
+    if (!/^\$?\s*\d{1,10}(,?\d{3})*(\.\d{1,4})?$/.test(s)) return { error: 'bad_currency' };
+    var n = parseFloat(s.replace(/[$,\s]/g, ''));
+    if (!isFinite(n) || n < 0) return { error: 'bad_currency' };
+    return { value: n };
+  }
+  function parseClawbackDays(v) {
+    if (typeof v === 'number') {
+      if (!isFinite(v) || v < 0 || v > 3650 || Math.floor(v) !== v) return { error: 'bad_clawback_days' };
+      return { value: v };
+    }
+    var s = String(v).trim();
+    if (!/^\d{1,4}$/.test(s)) return { error: 'bad_clawback_days' };
+    var n = parseInt(s, 10);
+    if (!isFinite(n) || n < 0 || n > 3650) return { error: 'bad_clawback_days' };
+    return { value: n };
+  }
+  function parseHoldBackPct(v) {
+    var n;
+    if (typeof v === 'number') n = v;
+    else {
+      var s = String(v).trim().replace(/%$/, '').trim();
+      if (!/^\d{1,3}(\.\d{1,4})?$/.test(s)) return { error: 'bad_hold_back_pct' };
+      n = parseFloat(s);
+    }
+    if (!isFinite(n) || n < 0 || n > 100) return { error: 'bad_hold_back_pct' };
+    return { value: n };
+  }
+  function parseTierOverrides(v) {
+    var obj;
+    if (typeof v === 'object' && v && !Array.isArray(v)) obj = v;
+    else {
+      try { obj = JSON.parse(String(v).trim()); } catch (e) { return { error: 'bad_tier_overrides_json' }; }
+    }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { error: 'bad_tier_overrides_json' };
+    var keys = Object.keys(obj);
+    for (var i = 0; i < keys.length; i++) {
+      var val = obj[keys[i]];
+      if (typeof val !== 'number' || !isFinite(val) || val < 0) return { error: 'bad_tier_overrides_json' };
+    }
+    return { value: JSON.stringify(obj) };
+  }
+  function collectCampaignPatch(params) {
+    params = params || {};
+    var raw;
+    if (params.patch && typeof params.patch === 'object' && !Array.isArray(params.patch)) raw = params.patch;
+    else if (params.fields && typeof params.fields === 'object' && !Array.isArray(params.fields)) raw = params.fields;
+    else raw = params;
+    var mapped = {}, unknown = [];
+    Object.keys(raw || {}).forEach(function (k) {
+      var ak = aliasKey(k);
+      if (PATCH_META_KEYS[ak]) return;
+      var canon = CAMPAIGN_RULE_ALIASES[ak];
+      if (!canon && CAMPAIGN_RULE_FIELDS.indexOf(k) >= 0) canon = k;
+      if (!canon) { unknown.push(k); return; }
+      mapped[canon] = raw[k];
+    });
+    var campaignId = String(
+      params.campaignId || params.Campaign_ID || (raw && (raw.Campaign_ID || raw.campaignId || raw.campaign_id)) || ''
+    ).trim();
+    return { mapped: mapped, unknown: unknown, campaignId: campaignId };
+  }
+
+  /**
+   * Validate a PATCH_CAMPAIGN_RULES body. Owner-only. Blank / omitted fields
+   * are left untouched (not cleared). Unknown keys are rejected.
+   */
+  function checkCampaignPatch(user, params) {
+    params = params || {};
+    if (!isOwner(user)) return { ok: false, status: 403, error: 'owner_only' };
+    var collected = collectCampaignPatch(params);
+    if (collected.unknown.length) return { ok: false, status: 400, error: 'unknown_field', detail: collected.unknown };
+    if (!collected.campaignId) return { ok: false, status: 400, error: 'missing_campaign_id' };
+    if (!CAMPAIGN_ID_RE.test(collected.campaignId)) return { ok: false, status: 400, error: 'bad_campaign_id' };
+    var mapped = collected.mapped;
+    var updates = {};
+    var currencyFields = {
+      Gross_Agency_Rev_Default: true, Rep_Base_Comm: true,
+      Certified_Bonus_Comm: true, Pod_Lead_Override: true
+    };
+    for (var i = 0; i < CAMPAIGN_RULE_FIELDS.length; i++) {
+      var field = CAMPAIGN_RULE_FIELDS[i];
+      if (field === 'Campaign_ID') continue; // key, not a mutable patch field
+      if (!Object.prototype.hasOwnProperty.call(mapped, field)) continue;
+      var v = mapped[field];
+      if (isBlankPatchValue(v)) continue; // leave existing cell untouched
+      if (field === 'Active_Flag') {
+        var flag = String(v).trim().toUpperCase();
+        if (flag !== 'Y' && flag !== 'N') return { ok: false, status: 400, error: 'bad_active_flag' };
+        updates[field] = flag;
+      } else if (currencyFields[field]) {
+        var cur = parseCurrencyField(v);
+        if (cur.error) return { ok: false, status: 400, error: cur.error, detail: field };
+        updates[field] = cur.value;
+      } else if (field === 'Clawback_Days') {
+        var days = parseClawbackDays(v);
+        if (days.error) return { ok: false, status: 400, error: days.error };
+        updates[field] = days.value;
+      } else if (field === 'Hold_Back_Pct') {
+        var pct = parseHoldBackPct(v);
+        if (pct.error) return { ok: false, status: 400, error: pct.error };
+        updates[field] = pct.value;
+      } else if (field === 'Tier_Overrides_JSON') {
+        var tier = parseTierOverrides(v);
+        if (tier.error) return { ok: false, status: 400, error: tier.error };
+        updates[field] = tier.value;
+      }
+    }
+    if (!Object.keys(updates).length) return { ok: false, status: 400, error: 'no_updates' };
+    return { ok: true, campaignId: collected.campaignId, updates: updates };
+  }
+
+  function campaignRuleDiff(beforeRow, updates) {
+    var before = {}, after = {}, fields = [];
+    Object.keys(updates || {}).forEach(function (k) {
+      var prev = beforeRow && beforeRow[k] != null && beforeRow[k] !== '' ? beforeRow[k] : '';
+      var next = updates[k];
+      if (String(prev) === String(next)) return;
+      before[k] = prev;
+      after[k] = next;
+      fields.push(k);
+    });
+    if (!fields.length) return null;
+    return {
+      fields: fields,
+      beforeValue: JSON.stringify(before),
+      afterValue: JSON.stringify(after),
+      patternTag: fields.join(',')
+    };
+  }
+
+  /**
+   * Human draft edits only: a field counts if the request provided editedTo /
+   * editedCc / editedSubject / editedBody and the trimmed value differs from
+   * the staged row. Auto sign-off is ignored (it is not a human edit).
+   */
+  function queueDraftDiff(row, params) {
+    params = params || {};
+    var map = {
+      Draft_To: params.editedTo,
+      Draft_Cc: params.editedCc,
+      Draft_Subject: params.editedSubject,
+      Draft_Body: params.editedBody
+    };
+    var before = {}, after = {}, fields = [];
+    Object.keys(map).forEach(function (k) {
+      if (map[k] == null) return;
+      var prev = String(row && row[k] != null ? row[k] : '').trim();
+      var next = String(map[k]).trim();
+      if (prev === next) return;
+      before[k] = prev;
+      after[k] = next;
+      fields.push(k);
+    });
+    if (!fields.length) return null;
+    return {
+      fields: fields,
+      beforeValue: JSON.stringify(before),
+      afterValue: JSON.stringify(after),
+      patternTag: 'QUEUE_DRAFT:' + fields.join(',')
+    };
+  }
+
+  function buildLearningLogRow(opts) {
+    opts = opts || {};
+    var source = String(opts.sourceModule || '').trim().toUpperCase();
+    if (LEARNING_SOURCE_MODULES.indexOf(source) < 0) source = '';
+    var applied = opts.appliedToRules;
+    var appliedFlag = (applied === 'Y' || applied === true) ? 'Y' : 'N';
+    return {
+      Timestamp: opts.timestamp || '',
+      Source_Module: source,
+      Entity_ID: opts.entityId != null ? String(opts.entityId) : '',
+      Before_Value: opts.beforeValue != null ? String(opts.beforeValue) : '',
+      After_Value: opts.afterValue != null ? String(opts.afterValue) : '',
+      Pattern_Tag: opts.patternTag || '',
+      Applied_To_Rules: appliedFlag
+    };
+  }
+
   return {
     buildPayload: buildPayload, validateClaims: validateClaims, findUser: findUser,
     MARGIN_FIELDS: MARGIN_FIELDS, ROLES: ROLES,
@@ -461,6 +689,10 @@ var DoorwayCore = (function () {
     isOwner: isOwner, buildQueue: buildQueue, checkQueueAction: checkQueueAction,
     isCarrierRecipient: isCarrierRecipient, carrierRecipients: carrierRecipients,
     ensureSignoff: ensureSignoff, nextQueueId: nextQueueId, hasSourceThread: hasSourceThread,
+    CAMPAIGN_RULE_FIELDS: CAMPAIGN_RULE_FIELDS, PAYROLL_LEDGER_COLUMNS: PAYROLL_LEDGER_COLUMNS,
+    LEARNING_LOG_COLUMNS: LEARNING_LOG_COLUMNS, LEARNING_SOURCE_MODULES: LEARNING_SOURCE_MODULES,
+    checkCampaignPatch: checkCampaignPatch, campaignRuleDiff: campaignRuleDiff,
+    queueDraftDiff: queueDraftDiff, buildLearningLogRow: buildLearningLogRow,
     _internals: { money: money, toDate: toDate, cityOf: cityOf, townOf: townOf, workingDaysMTD: workingDaysMTD, truthy: truthy }
   };
 })();

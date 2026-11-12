@@ -117,3 +117,10 @@ test('Frontend: sessionStorage is cleared on Sign out and auth errors; demo mode
   // Combined boot queue is applied on Owner render
   assert.match(app, /applyBootQueue\(d\)/);
 });
+
+test('PATCH_CAMPAIGN_RULES also busts the boot cache', () => {
+  const rules = fs.readFileSync(path.join(__dirname, '../apps-script/Rules.js'), 'utf8');
+  const fn = rules.indexOf('function handleCampaignPatch_');
+  assert.ok(fn >= 0);
+  assert.ok(rules.indexOf('bustBootCache_()', fn) > fn);
+});

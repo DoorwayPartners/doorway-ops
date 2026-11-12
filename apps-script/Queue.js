@@ -74,6 +74,18 @@ function handleQueueAction_(action, user, req, props) {
       bustBootCache_();
       return { status: 502, error: 'send_failed', message: 'Not sent. The item is back in the queue.' };
     }
+    var draftDiff = DoorwayCore.queueDraftDiff(hit, req || {});
+    if (draftDiff) {
+      logLearningSafe_(props, DoorwayCore.buildLearningLogRow({
+        timestamp: now,
+        sourceModule: 'QUEUE_EDIT',
+        entityId: queueId,
+        beforeValue: draftDiff.beforeValue,
+        afterValue: draftDiff.afterValue,
+        patternTag: draftDiff.patternTag,
+        appliedToRules: false
+      }));
+    }
     return { status: 200, queueId: queueId, sent: true, via: how, to: m.to, cc: m.cc, resolvedAt: now };
   } finally {
     lock.releaseLock();
