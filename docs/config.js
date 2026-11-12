@@ -6,5 +6,5 @@
  */
 window.DOORWAY_CONFIG = {
   GOOGLE_CLIENT_ID: 'REPLACE_WITH_OAUTH_CLIENT_ID.apps.googleusercontent.com',
-  API_URL: 'REPLACE_WITH_APPS_SCRIPT_WEB_APP_URL'
+  API_URL: 'https://script.google.com/macros/s/AKfycbzlmCKst9Z33ITESqLkac_lxP_l5vlROhDJF_krOQP-uJM1MK1M6crqV71qs-iLpoDxJg/exec'
 };

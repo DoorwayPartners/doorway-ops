@@ -165,7 +165,9 @@ test('Site copy of core is identical to the Apps Script core (run npm run build)
 test('No secrets or real sheet IDs in tracked source', () => {
   const files = ['apps-script/Code.js', 'apps-script/Core.js', 'docs/app.js', 'docs/config.js', 'docs/index.html'];
   for (const f of files) {
-    const t = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+    // The public web-app URL (deployment ID) is allowed; nothing else that looks like a Drive/Sheet ID is.
+    const t = fs.readFileSync(path.join(__dirname, '..', f), 'utf8')
+      .replace(/https:\/\/script\.google\.com\/macros\/s\/AKfy[A-Za-z0-9_-]+\/exec/g, '');
     assert.ok(!/[A-Za-z0-9_-]{40,}/.test(t), `${f} contains a Google-ID-like string (sheet IDs belong in Script Properties)`);
     assert.ok(!/GOCSPX-|AIza[0-9A-Za-z_-]{20,}|-----BEGIN/.test(t), `${f} contains a secret-looking string`);
   }
