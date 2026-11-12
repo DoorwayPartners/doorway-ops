@@ -182,7 +182,7 @@
   // ---------- V2/V3: Owner Priority Queue (Owner role only) ----------
   var view = 'queue'; // Owner default landing tab
   var lastDash = null;
-  var lastQueue = null; // { items, counts } from GET_QUEUE — never taken from the dashboard payload
+  var lastQueue = null; // { items, counts, status } from the Owner boot payload or GET_QUEUE
   var queueFilter = 'all';
   var PRI_TONE = { 'P1-URGENT': 'bad', 'P2-OPS': 'warn', 'P3-ADMIN': 'info' };
   var PRI_LABEL = { 'P1-URGENT': 'P1 Urgent', 'P2-OPS': 'P2 Field Ops', 'P3-ADMIN': 'P3 Admin' };
@@ -205,6 +205,70 @@
   }
   function queueApi(payload) { return DEMO ? Promise.resolve(demoQueueAction(payload)) : apiPost(payload); }
 
+  // V3.1 stale-while-revalidate: last authenticated dashboard + queue in sessionStorage.
+  // Key includes the signed-in email + role. Never written in demo mode.
+  var BOOT_PREFIX = 'doorway-ops-boot:';
+  function bootCacheKey(email, role) {
+    return BOOT_PREFIX + String(email || '').trim().toLowerCase() + ':' + String(role || '');
+  }
+  function clearBootCache() {
+    try {
+      var remove = [];
+      for (var i = 0; i < sessionStorage.length; i++) {
+        var k = sessionStorage.key(i);
+        if (k && k.indexOf(BOOT_PREFIX) === 0) remove.push(k);
+      }
+      remove.forEach(function (k) { sessionStorage.removeItem(k); });
+    } catch (e) {}
+  }
+  function readBootCache(email) {
+    if (DEMO || !email) return null;
+    var prefix = BOOT_PREFIX + String(email).trim().toLowerCase() + ':';
+    try {
+      for (var i = 0; i < sessionStorage.length; i++) {
+        var k = sessionStorage.key(i);
+        if (!k || k.indexOf(prefix) !== 0) continue;
+        var obj = JSON.parse(sessionStorage.getItem(k));
+        if (obj && obj.status === 200 && obj.me && String(obj.me.email).toLowerCase() === String(email).trim().toLowerCase()) return obj;
+        sessionStorage.removeItem(k);
+      }
+    } catch (e) {}
+    return null;
+  }
+  function writeBootCache(dash, queue) {
+    if (DEMO) return;
+    if (!dash || !dash.me || !dash.me.email || !dash.role) return;
+    clearBootCache();
+    var stored;
+    try { stored = JSON.parse(JSON.stringify(dash)); } catch (e) { return; }
+    stored.status = stored.status || 200;
+    if (dash.role === 'Owner' && queue && queue.status === 200 && queue.items && queue.counts) {
+      stored.queue = { status: 200, items: queue.items, counts: queue.counts };
+    } else if (dash.role !== 'Owner') {
+      delete stored.queue;
+    }
+    try { sessionStorage.setItem(bootCacheKey(dash.me.email, dash.role), JSON.stringify(stored)); } catch (e) {}
+  }
+  function applyBootQueue(d) {
+    if (d && d.role === 'Owner' && d.queue && Array.isArray(d.queue.items) && d.queue.counts) {
+      lastQueue = { status: 200, items: d.queue.items, counts: d.queue.counts };
+      updateHudP1(lastQueue.counts.p1);
+      updateQueueBadge(lastQueue.counts.total);
+      return true;
+    }
+    return false;
+  }
+  function emailFromToken(token) {
+    try {
+      var parts = String(token || '').split('.');
+      if (parts.length !== 3) return '';
+      var b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      return String(JSON.parse(atob(b64)).email || '').trim().toLowerCase();
+    } catch (e) { return ''; }
+  }
+
+
   function toast(text, tone) {
     var t = el('div', { class: 'toast ' + (tone || ''), text: text });
     document.body.appendChild(t);
@@ -225,6 +289,7 @@
         lastQueue = q;
         updateHudP1(q.counts.p1);
         updateQueueBadge(q.counts.total);
+        writeBootCache(lastDash, lastQueue);
       }
       return q;
     });
@@ -298,7 +363,7 @@
       if (!items.length) { box.appendChild(card(null, [empty('Nothing waiting for approval.')], 'center')); return; }
       items.forEach(function (it) { box.appendChild(queueRow(it)); });
     }
-    if (lastQueue && lastQueue.status === 200) paint(lastQueue);
+    if (lastQueue && lastQueue.status === 200) { paint(lastQueue); return; }
     loadQueue().then(function (q) { paint(q); }).catch(function () {
       box.textContent = '';
       box.appendChild(card('Connection problem', [el('p', { class: 'muted', text: 'Could not reach the Doorway Ops server.' })]));
@@ -391,11 +456,12 @@
     document.getElementById('whoami').textContent = d.me.name + ' · ' + d.role + ' · as of ' + d.asOf;
     mountHud(d);
     if (d.role === 'Owner') { // queue tab exists for the Owner role only; the API enforces it too
+      applyBootQueue(d);
       main.appendChild(viewTabs());
       if (view === 'queue') return renderQueueView();
       var ownerKids = view === 'team' ? renderTeam(d) : view === 'field' ? renderField(d) : renderMoney(d);
       main.appendChild(dashGrid(ownerKids));
-      if (view !== 'queue') loadQueue().catch(function () {});
+      if (view !== 'queue' && !lastQueue) loadQueue().catch(function () {});
       return;
     }
     var kids = d.role === 'Rep' ? renderRep(d) : d.role === 'Manager' ? renderManager(d) : renderExec(d);
@@ -411,13 +477,36 @@
   // ---------- live mode ----------
   function onCredential(resp) {
     idToken = resp.credential;
-    main.textContent = '';
-    main.appendChild(card('Loading…', [el('div', { class: 'skeleton' })]));
+    var email = emailFromToken(idToken);
+    var cached = readBootCache(email);
+    if (cached) {
+      document.getElementById('signout').classList.remove('hidden');
+      applyBootQueue(cached);
+      render(cached);
+    } else {
+      main.textContent = '';
+      main.appendChild(card('Loading…', [el('div', { class: 'skeleton' })]));
+    }
     fetch(CFG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ idToken: idToken }), redirect: 'follow', credentials: 'omit' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (d.status === 403) return showError('No access', 'This Google account is not on the Doorway Ops access list. Ask Cristian to add you.');
+        if (d.status === 401 || d.status === 403) {
+          clearBootCache();
+          idToken = null;
+          lastDash = null;
+          lastQueue = null;
+          document.getElementById('signout').classList.add('hidden');
+          if (d.status === 403) return showError('No access', 'This Google account is not on the Doorway Ops access list. Ask Cristian to add you.');
+          return showError('Sign-in problem', 'Please sign in again. (' + (d.reason || d.error || d.status) + ')');
+        }
         if (d.status && d.status !== 200) return showError('Sign-in problem', 'Please sign in again. (' + (d.reason || d.error || d.status) + ')');
+        var freshEmail = String((d.me && d.me.email) || '').trim().toLowerCase();
+        if (cached && (d.role !== cached.role || freshEmail !== String((cached.me && cached.me.email) || '').toLowerCase() || (email && freshEmail !== email))) {
+          clearBootCache();
+          lastQueue = null;
+        }
+        applyBootQueue(d);
+        writeBootCache(d, lastQueue);
         document.getElementById('signout').classList.remove('hidden');
         render(d);
       })
@@ -435,7 +524,10 @@
     s.onerror = function () { msg.textContent = 'Could not load Google Sign-In.'; };
     document.head.appendChild(s);
     document.getElementById('signout').addEventListener('click', function () {
+      clearBootCache();
       idToken = null;
+      lastDash = null;
+      lastQueue = null;
       if (window.google && google.accounts) google.accounts.id.disableAutoSelect();
       location.reload();
     });

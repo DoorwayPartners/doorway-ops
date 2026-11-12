@@ -54,23 +54,61 @@ function handle_(idToken, req) {
     if (!check.ok) return json_({ status: 401, error: 'invalid_token', reason: check.reason });
 
     var raw = { users: readTab_(props.getProperty('PAYROLL_SHEET_ID'), TABS.users) };
-    // Fail closed before reading anything else.
+    // Fail closed before reading anything else. Auth + role are resolved BEFORE any boot-cache read.
     var user = DoorwayCore.findUser(raw.users, check.email);
     if (!user) return json_({ status: 403, error: 'forbidden', message: 'This Google account is not on the Doorway Ops access list.' });
 
     // V2 Owner Priority Queue actions (POST only). Owner role is re-checked in Queue.js.
+    // GET_QUEUE always reads the sheet (fresh manual refresh). It does not use the boot cache.
     var action = req && req.action ? String(req.action) : '';
     if (action) return json_(handleQueueAction_(action, user, req, props));
 
-    loadData_(raw, props, user.role);
     var today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+    var cached = readBootCache_(user, today);
+    if (cached) return json_(cached);
+
+    loadData_(raw, props, user.role);
     var result = DoorwayCore.buildPayload(check.email, raw, today);
     result.body.status = result.status;
+    // Combined boot payload: Owner also gets the active Priority Queue in this same response.
+    // Non-Owners must not receive a queue field.
+    if (user.role === 'Owner') {
+      var q = DoorwayCore.buildQueue(readQueue_(queueSheetId_(props)).rows);
+      q.status = 200;
+      result.body.queue = q;
+    }
+    writeBootCache_(user, today, result.body);
     return json_(result.body);
   } catch (err) {
     console.error(err && err.stack || err);
     return json_({ status: 500, error: 'server_error' });
   }
+}
+
+// ---------- V3.1 script cache (read-only boot payload, 180s) ----------
+// Key is derived only from the already-verified user (role + email) and today.
+function bootCacheKeyFor_(user, today) {
+  var cache = CacheService.getScriptCache();
+  return DoorwayBootCache.key(cache.get(DoorwayBootCache.GEN_KEY) || '0', user.role, user.email, today);
+}
+
+function readBootCache_(user, today) {
+  var raw = CacheService.getScriptCache().get(bootCacheKeyFor_(user, today));
+  if (!raw) return null;
+  try { return DoorwayBootCache.accept(JSON.parse(raw), user); } catch (e) { return null; }
+}
+
+function writeBootCache_(user, today, body) {
+  if (!DoorwayBootCache.accept(body, user)) return;
+  var text = JSON.stringify(body);
+  if (!DoorwayBootCache.canStore(text)) return; // skip rather than exceed the 100 KB value limit
+  CacheService.getScriptCache().put(bootCacheKeyFor_(user, today), text, DoorwayBootCache.TTL_SEC);
+}
+
+/** Drop every role/user boot entry by advancing the generation prefix. */
+function bustBootCache_() {
+  var cache = CacheService.getScriptCache();
+  cache.put(DoorwayBootCache.GEN_KEY, DoorwayBootCache.nextGen(cache.get(DoorwayBootCache.GEN_KEY) || '0'), DoorwayBootCache.GEN_TTL_SEC);
 }
 
 /** Verify a GIS ID token. Google's tokeninfo checks the signature and expiry. */

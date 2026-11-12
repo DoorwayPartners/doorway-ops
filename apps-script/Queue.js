@@ -53,6 +53,7 @@ function handleQueueAction_(action, user, req, props) {
 
     if (action === 'UPDATE_QUEUE_STATUS') {
       setCells_(q2, hit._row, { Status: check.newStatus, Resolved_At: now });
+      bustBootCache_();
       return { status: 200, queueId: queueId, newStatus: check.newStatus, resolvedAt: now };
     }
 
@@ -61,6 +62,7 @@ function handleQueueAction_(action, user, req, props) {
     var m = check.send;
     setCells_(q2, hit._row, { Draft_To: m.to, Draft_Cc: m.cc, Draft_Subject: m.subject, Draft_Body: m.body, Status: 'APPROVED_SENT', Resolved_At: now });
     SpreadsheetApp.flush();
+    bustBootCache_();
     var how;
     try {
       how = sendStaged_(hit.Source_Thread_ID, m);
@@ -69,6 +71,7 @@ function handleQueueAction_(action, user, req, props) {
       original.Status = 'PENDING'; original.Resolved_At = '';
       setCells_(q2, hit._row, original);
       SpreadsheetApp.flush();
+      bustBootCache_();
       return { status: 502, error: 'send_failed', message: 'Not sent. The item is back in the queue.' };
     }
     return { status: 200, queueId: queueId, sent: true, via: how, to: m.to, cc: m.cc, resolvedAt: now };
@@ -183,6 +186,7 @@ function urgentIntakeSweep() {
       }
       t.addLabel(label);
     });
+    if (added > 0) bustBootCache_();
     return 'added ' + added;
   } finally {
     lock.releaseLock();
