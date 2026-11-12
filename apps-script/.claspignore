@@ -9,3 +9,4 @@
 !PdfEngine.js
 !FeedImporter.js
 !EntityLinker.js
+!QueueGuard.js

@@ -197,9 +197,23 @@
     var rows = DOORWAY_DEMO.raw.queue, row = null;
     if (p.action === 'GET_QUEUE') { var q = DoorwayCore.buildQueue(rows); q.status = 200; return q; }
     for (var i = 0; i < rows.length; i++) if (rows[i].Queue_ID === p.queueId) row = rows[i];
+    if (p.action === 'INSTRUCT_DRAFT') {
+      var ins = DoorwayCore.checkInstructDraft({ role: 'Owner' }, p);
+      if (!ins.ok) return { status: ins.status, error: ins.error };
+      var applied = DoorwayCore.applyInstructDraft(p);
+      if (row) { row.Draft_Body = applied.updatedBody; row.draft_body = applied.updatedBody; }
+      return { status: 200, updatedBody: applied.updatedBody, savedRule: applied.saveAsRule, demo: true };
+    }
     var chk = DoorwayCore.checkQueueAction({ role: 'Owner' }, p.action, row, p);
     if (!chk.ok) return { status: chk.status, error: chk.error, carrier: chk.carrier };
     if (p.action === 'UPDATE_QUEUE_STATUS') { row.Status = chk.newStatus; return { status: 200, newStatus: chk.newStatus }; }
+    var stale = DoorwayCore.checkStaleThread(p, row);
+    if (!stale.ok) {
+      return { status: 409, reason: stale.reason, error: stale.error, freshSnapshot: {
+        thread_context: row.thread_context, thread_timeline: row.thread_timeline || [],
+        thread_msg_count: row.thread_msg_count, last_message_id: row.last_message_id, synced_at_et: row.synced_at_et
+      } };
+    }
     row.Status = 'APPROVED_SENT';
     return { status: 200, sent: true, demo: true, to: chk.send.to };
   }
@@ -282,6 +296,84 @@
     var t = el('div', { class: 'toast ' + (tone || ''), text: text });
     document.body.appendChild(t);
     setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 3500);
+  }
+  // 5s undo toast: delays the callback. Undo cancels BEFORE any server call.
+  // Never claims to unsend mail that already went out.
+  function startUndoCountdown(onSend, onCancel) {
+    var remaining = 5, cancelled = false, timer = null;
+    var msg = el('span', { class: 'undo-msg', text: 'Sending in 5s…' });
+    var btn = el('button', { type: 'button', class: 'undo-btn', text: 'Undo' });
+    var node = el('div', { class: 'toast undo-toast', role: 'status' }, [msg, btn]);
+    function remove() { if (node.parentNode) node.parentNode.removeChild(node); }
+    function tick() {
+      if (cancelled) return;
+      remaining -= 1;
+      if (remaining <= 0) { remove(); onSend(); return; }
+      msg.textContent = 'Sending in ' + remaining + 's…';
+      timer = setTimeout(tick, 1000);
+    }
+    btn.addEventListener('click', function () {
+      if (cancelled) return;
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      remove();
+      if (onCancel) onCancel();
+    });
+    document.body.appendChild(node);
+    timer = setTimeout(tick, 1000);
+    return function abort() {
+      if (cancelled) return;
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      remove();
+    };
+  }
+  function orderIdOf(it) {
+    var blob = [it.Draft_Subject, it.draft_subject, it.Context_Summary, it.Draft_Body, it.draft_body].join(' ');
+    var m = blob.match(/\b(?:Order\s+)?([A-Z]{2,}[-_]?\d{3,}[A-Z0-9]*)/i);
+    return m ? m[1] : '';
+  }
+  function syncLabel(it) {
+    var parts = [];
+    if (it.synced_at_et) parts.push('Synced ' + it.synced_at_et);
+    if (it.thread_msg_count != null && it.thread_msg_count !== '') {
+      var n = Number(it.thread_msg_count);
+      parts.push((isFinite(n) ? n : 0) + ' msg' + (n === 1 ? '' : 's'));
+    }
+    return parts.join(' · ');
+  }
+  function paintTimeline(host, items) {
+    host.textContent = '';
+    host.appendChild(el('summary', { text: 'Thread history' }));
+    var list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      host.appendChild(el('p', { class: 'muted small', text: 'No earlier messages.' }));
+      return;
+    }
+    host.appendChild(el('ol', { class: 'q-timeline-list' }, list.map(function (m) {
+      return el('li', { class: 'q-timeline-item' }, [
+        el('div', { class: 'q-timeline-meta small muted', text: (m.date_et || '') + ' · ' + (m.from || '') }),
+        el('div', { class: 'q-timeline-snip small', text: m.snippet || '' })
+      ]);
+    })));
+  }
+  function startDictation(input, say) {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { say('Voice dictation isn’t available in this browser. Type the instruction instead.', 'bad'); return; }
+    var rec = new SR();
+    rec.lang = 'en-US';
+    rec.interimResults = true;
+    rec.continuous = false;
+    rec.onresult = function (ev) {
+      var text = '';
+      for (var i = ev.resultIndex; i < ev.results.length; i++) text += ev.results[i][0].transcript;
+      if (text) input.value = text.trim();
+    };
+    rec.onerror = function (ev) {
+      if (ev.error === 'not-allowed') say('Microphone permission was denied. You can still type the instruction.', 'bad');
+      else if (ev.error !== 'aborted' && ev.error !== 'no-speech') say('Dictation stopped (' + ev.error + ').', 'bad');
+    };
+    try { rec.start(); } catch (e) { say('Could not start dictation. Type the instruction instead.', 'bad'); }
   }
 
   function prettyCat(c) { return String(c || '').replace(/_/g, ' '); }
@@ -409,16 +501,39 @@
     var draftBody = it.draft_body || it.Draft_Body || '(no draft yet)';
     var threadCtx = it.thread_context || it.Context_Summary || '';
     var threadBox = threadCtx ? el('div', { class: 'q-thread-box', text: threadCtx }) : null;
+    var badgeText = syncLabel(it);
+    var syncBadge = el('div', { class: 'q-sync-badge', text: badgeText || '' });
+    if (!badgeText) syncBadge.classList.add('hidden');
+    var timelineBox = el('details', { class: 'q-timeline' });
+    paintTimeline(timelineBox, it.thread_timeline);
+    var staleBanner = el('div', { class: 'q-stale-banner hidden' });
+    var draftBodyNode = el('div', { class: 'q-draft-body', text: draftBody });
     var draftBox = el('details', { class: 'q-draft-box', open: 'open' }, [
       el('summary', { text: 'Draft: ' + subject }),
       el('div', { class: 'small', text: 'To: ' + (it.Draft_To || '— (add in Edit Draft)') + (it.Draft_Cc ? ' · Cc: ' + it.Draft_Cc : '') }),
       el('div', { class: 'small', text: 'Subject: ' + subject }),
-      el('div', { class: 'q-draft-body', text: draftBody })
+      draftBodyNode
+    ]);
+    var instructInput = el('input', { type: 'text', placeholder: 'Dictate or type instruction...' });
+    var sopToggle = el('input', { type: 'checkbox' });
+    var chipRow = el('div', { class: 'q-chips' });
+    var instructBar = el('div', { class: 'q-instruct' }, [
+      chipRow,
+      el('div', { class: 'q-instruct-row' }, [
+        instructInput,
+        el('button', { type: 'button', class: 'btn line', text: 'Dictate', onclick: function () { startDictation(instructInput, say); } })
+      ]),
+      el('label', { class: 'sop' }, [sopToggle, document.createTextNode('Save as permanent SOP rule')]),
+      el('button', { type: 'button', class: 'btn line', text: 'Apply to Draft', onclick: function () { applyInstruction(''); } })
     ]);
     var body = el('div', { class: 'qrow-body' }, [
       el('div', { class: 'qfrom', text: it.Rep_Or_Sender || '' }),
+      syncBadge,
+      staleBanner,
       threadBox,
+      timelineBox,
       draftBox,
+      instructBar,
       carrierPill,
       editBox, msg,
       el('div', { class: 'actions' }, buttons)
@@ -439,27 +554,106 @@
     btnEdit.addEventListener('click', function () {
       editing = !editing; editBox.classList.toggle('hidden', !editing); btnEdit.textContent = editing ? 'Cancel edit' : 'Edit Draft';
     });
+    function applyFreshSnapshot(snap) {
+      if (!snap) return;
+      if (snap.thread_context) {
+        if (threadBox) threadBox.textContent = snap.thread_context;
+      }
+      if (snap.synced_at_et || snap.thread_msg_count != null) {
+        it.synced_at_et = snap.synced_at_et || it.synced_at_et;
+        if (snap.thread_msg_count != null) it.thread_msg_count = snap.thread_msg_count;
+        if (snap.last_message_id) it.last_message_id = snap.last_message_id;
+        var label = syncLabel(it);
+        syncBadge.textContent = label;
+        syncBadge.classList.toggle('hidden', !label);
+      }
+      if (snap.thread_timeline) {
+        it.thread_timeline = snap.thread_timeline;
+        paintTimeline(timelineBox, snap.thread_timeline);
+      }
+      if (snap.draft_body) {
+        it.draft_body = snap.draft_body;
+        draftBodyNode.textContent = snap.draft_body;
+        if (!editing) inBody.value = snap.draft_body;
+      }
+    }
+    function applyInstruction(chip) {
+      var instruction = instructInput.value.trim();
+      if (!chip && !instruction) return say('Choose a chip or type an instruction first.', 'bad');
+      var payload = {
+        action: 'INSTRUCT_DRAFT',
+        queueId: it.Queue_ID,
+        draftId: it.Draft_ID || it.Gmail_Draft_ID || '',
+        orderId: orderIdOf(it),
+        currentBody: (editing ? inBody.value : (it.draft_body || it.Draft_Body || '')),
+        instruction: chip ? '' : instruction,
+        chip: chip || '',
+        saveAsRule: sopToggle.checked
+      };
+      busy(true); say('Updating draft…');
+      queueApi(payload).then(function (r) {
+        busy(false);
+        if (r.status !== 200 || !r.updatedBody) return say('Draft not updated (' + (r.error || r.status) + ').', 'bad');
+        it.Draft_Body = r.updatedBody;
+        it.draft_body = r.updatedBody;
+        draftBodyNode.textContent = r.updatedBody;
+        inBody.value = r.updatedBody;
+        say(r.savedRule ? 'Draft updated and tagged as an SOP candidate. Nothing was sent.' : 'Draft updated. Nothing was sent.', '');
+      }).catch(function () { busy(false); say('Connection problem. Draft was not updated.', 'bad'); });
+    }
+    [
+      { chip: 'SHORTER_FIRMER', label: 'Shorter & Firmer' },
+      { chip: 'ASK_ETA', label: 'Ask for ETA' },
+      { chip: 'CONFIRM_RESCHEDULE', label: 'Confirm Reschedule' },
+      { chip: 'HOLD_REP_INFO', label: 'Hold — Need Rep Info' }
+    ].forEach(function (c) {
+      chipRow.appendChild(el('button', { type: 'button', class: 'q-chip', text: c.label, onclick: function () { applyInstruction(c.chip); } }));
+    });
+    var pendingSend = null;
     btnSend.addEventListener('click', function () {
       var to = editing && inTo.value.trim() ? inTo.value.trim() : (it.Draft_To || '');
       var cc = editing ? inCc.value.trim() : (it.Draft_Cc || '');
       var subj = editing && inSubj.value.trim() ? inSubj.value.trim() : (it.Draft_Subject || '');
       if (!to) return say('Add a recipient in Edit Draft first.', 'bad');
       if (!window.confirm('Send this email now from Cristian@doorwaypartners.com?\n\nTo: ' + to + (cc ? '\nCc: ' + cc : '') + '\nSubject: ' + subj)) return;
-      var payload = { action: 'APPROVE_AND_SEND', queueId: it.Queue_ID, confirm: true };
+      var payload = { action: 'SAFE_APPROVE_SEND', queueId: it.Queue_ID, confirm: true };
       if (editing) { payload.editedTo = inTo.value; payload.editedCc = inCc.value; payload.editedSubject = inSubj.value; payload.editedBody = inBody.value; }
       var carrier = DoorwayCore.carrierRecipients(to, cc);
       if (carrier.length) {
         if (!window.confirm('CARRIER RECIPIENT: ' + carrier.join(', ') + '\n\nThis email goes to a carrier. Tap OK again only if you are sure.')) return;
         payload.confirmCarrier = true;
       }
-      busy(true); say('Sending…');
-      queueApi(payload).then(function (r) {
-        if (r.status === 200) return done((r.demo ? 'Demo: would send to ' : 'Sent to ') + (r.to || to));
+      payload.expectedMsgCount = it.thread_msg_count || 0;
+      payload.expectedLastMsgId = it.last_message_id || '';
+      payload.threadId = it.thread_id || (it.Source_Thread_ID || '');
+      payload.draftId = it.Draft_ID || it.Gmail_Draft_ID || '';
+      payload.idempotencyToken = it.Queue_ID + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+      if (pendingSend) return;
+      busy(true); say('Sending in 5 seconds. Tap Undo to cancel.');
+      pendingSend = startUndoCountdown(function () {
+        pendingSend = null;
+        say('Sending…');
+        queueApi(payload).then(function (r) {
+          if (r.status === 200) return done((r.demo ? 'Demo: would send to ' : (r.deduped ? 'Already sent to ' : 'Sent to ')) + (r.to || to));
+          busy(false);
+          if (r.status === 428) return say('Carrier recipient needs the second confirm. Nothing was sent.', 'bad');
+          if (r.status === 409 && r.reason === 'STALE_THREAD_NEW_REPLY') {
+            staleBanner.classList.remove('hidden');
+            staleBanner.textContent = '';
+            staleBanner.appendChild(el('strong', { text: 'New email arrived — send halted.' }));
+            staleBanner.appendChild(el('div', { class: 'q-stale-msg small', text: (r.error || '') + (r.freshSnapshot && r.freshSnapshot.thread_context ? ' ' + r.freshSnapshot.thread_context : '') }));
+            applyFreshSnapshot(r.freshSnapshot);
+            return say('Send halted. A new email arrived on this thread. Review it, then approve again if you still want to send.', 'bad');
+          }
+          if (r.status === 409) return say('Already handled. Nothing was sent again.', 'bad');
+          say('Not sent (' + (r.error || r.status) + ').', 'bad');
+        }).catch(function () { busy(false); say('Connection problem. Not confirmed as sent; reload before retrying.', 'bad'); });
+      }, function () {
+        pendingSend = null;
         busy(false);
-        if (r.status === 428) return say('Carrier recipient needs the second confirm. Nothing was sent.', 'bad');
-        if (r.status === 409) return say('Already handled. Nothing was sent again.', 'bad');
-        say('Not sent (' + (r.error || r.status) + ').', 'bad');
-      }).catch(function () { busy(false); say('Connection problem. Not confirmed as sent; reload before retrying.', 'bad'); });
+        say('Send cancelled. Nothing was sent.', '');
+        toast('Send cancelled. Nothing was sent.', '');
+      });
     });
     function setStatus(ns, verb) {
       busy(true);

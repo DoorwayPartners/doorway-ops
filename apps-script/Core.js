@@ -386,6 +386,7 @@ var DoorwayCore = (function () {
   function queueStatus(row) { return String((row && row.Status) || '').trim().toUpperCase(); }
 
   var DRAFT_PREVIEW_MAX = 1200;
+  var INSTRUCT_CHIPS = ['SHORTER_FIRMER', 'ASK_ETA', 'CONFIRM_RESCHEDULE', 'HOLD_REP_INFO'];
   function stripHtmlTags(s) {
     return String(s == null ? '' : s).replace(/<[^>]*>/g, '');
   }
@@ -396,10 +397,23 @@ var DoorwayCore = (function () {
     }
     return '';
   }
+  function sanitizeTimeline(list) {
+    if (!Array.isArray(list)) return [];
+    return list.slice(-5).map(function (m) {
+      m = m || {};
+      return {
+        id: String(m.id || ''),
+        from: stripHtmlTags(m.from || ''),
+        date_et: String(m.date_et || ''),
+        snippet: stripHtmlTags(m.snippet || '').replace(/\s+/g, ' ').trim().slice(0, 220)
+      };
+    });
+  }
   /**
-   * Attach draft_subject, draft_body (plain text, max 1,200 chars), and
-   * thread_context on a queue item. `preview` (from Gmail or the raw row)
-   * wins when present; otherwise the staged sheet draft / Context_Summary.
+   * Attach draft_subject, draft_body (plain text, max 1,200 chars),
+   * thread_context, and V3.6 thread freshness fields on a queue item.
+   * `preview` (from Gmail or the raw row) wins when present; otherwise
+   * the staged sheet draft / Context_Summary.
    */
   function applyQueuePreview(item, preview) {
     var row = item || {};
@@ -407,7 +421,78 @@ var DoorwayCore = (function () {
     row.draft_subject = firstText_(p.draft_subject, row.draft_subject, row.Draft_Subject);
     row.draft_body = stripHtmlTags(firstText_(p.draft_body, row.draft_body, row.Draft_Body)).slice(0, DRAFT_PREVIEW_MAX);
     row.thread_context = firstText_(p.thread_context, row.thread_context, p.Context_Summary, row.Context_Summary);
+    var timelineSrc = Array.isArray(p.thread_timeline) ? p.thread_timeline
+      : Array.isArray(row.thread_timeline) ? row.thread_timeline : [];
+    row.thread_timeline = sanitizeTimeline(timelineSrc);
+    var countSrc = p.thread_msg_count != null && p.thread_msg_count !== '' ? p.thread_msg_count
+      : (row.thread_msg_count != null && row.thread_msg_count !== '' ? row.thread_msg_count : row.thread_timeline.length);
+    var count = Number(countSrc);
+    row.thread_msg_count = isFinite(count) ? count : row.thread_timeline.length;
+    row.last_message_id = firstText_(p.last_message_id, row.last_message_id);
+    row.synced_at_et = firstText_(p.synced_at_et, row.synced_at_et);
     return row;
+  }
+
+  function orderLabel_(payload) {
+    return String((payload && payload.orderId) || '').trim();
+  }
+  function applyInstructDraft(payload) {
+    payload = payload || {};
+    var instruction = String(payload.instruction || '').trim();
+    var currentBody = String(payload.currentBody || '').trim();
+    var chip = String(payload.chip || '').trim().toUpperCase();
+    var orderId = orderLabel_(payload);
+    var updatedBody = currentBody;
+    if (chip === 'SHORTER_FIRMER') {
+      updatedBody = 'Following up urgently on Order ' + orderId + '. Please confirm current field/install status and exact ETA today so we can prevent customer cancellation.\n\nThank you,\nDoorway Partners Ops';
+    } else if (chip === 'ASK_ETA') {
+      updatedBody = 'Hi team — checking in on Order ' + orderId + '. Can you share the confirmed technician/drop ETA so we can keep the customer updated?\n\nBest,\nDoorway Partners Ops';
+    } else if (chip === 'CONFIRM_RESCHEDULE') {
+      updatedBody = 'Update on Order ' + orderId + ': customer confirmed rescheduled appointment window. Please keep order active and confirm dispatch on your end.\n\nThank you,\nDoorway Partners Ops';
+    } else if (chip === 'HOLD_REP_INFO') {
+      updatedBody = 'Holding on Order ' + orderId + '. We need additional information from the assigned rep before this can proceed. Please pause action until we follow up.\n\nThank you,\nDoorway Partners Ops';
+    } else if (instruction) {
+      updatedBody = currentBody + '\n\n[Ops Update Note: ' + instruction + ']';
+    }
+    return {
+      updatedBody: updatedBody,
+      chip: chip,
+      instruction: instruction,
+      saveAsRule: Boolean(payload.saveAsRule)
+    };
+  }
+  function checkInstructDraft(user, params) {
+    params = params || {};
+    if (!isOwner(user)) return { ok: false, status: 403, error: 'owner_only' };
+    var queueId = String(params.queueId || '').trim();
+    if (!/^Q-\d{8}-\d{3,}$/.test(queueId)) return { ok: false, status: 400, error: 'bad_queue_id' };
+    var chip = String(params.chip || '').trim().toUpperCase();
+    var instruction = String(params.instruction || '').trim();
+    if (chip && INSTRUCT_CHIPS.indexOf(chip) < 0) return { ok: false, status: 400, error: 'bad_chip' };
+    if (!chip && !instruction) return { ok: false, status: 400, error: 'no_instruction' };
+    return { ok: true, chip: chip, instruction: instruction, saveAsRule: Boolean(params.saveAsRule) };
+  }
+  /**
+   * Compare the card's expected thread fingerprint with a live snapshot.
+   * live may be a getFullThreadSnapshot_ result or a queue item preview.
+   */
+  function checkStaleThread(params, live) {
+    params = params || {};
+    live = live || {};
+    var expectedCount = Number(params.expectedMsgCount || 0);
+    var expectedLast = String(params.expectedLastMsgId || '');
+    var liveCount = Number(live.thread_msg_count || 0);
+    var liveLast = String(live.last_message_id || '');
+    if ((expectedCount > 0 && liveCount > expectedCount) ||
+        (expectedLast && liveLast && liveLast !== expectedLast)) {
+      return {
+        ok: false,
+        status: 409,
+        reason: 'STALE_THREAD_NEW_REPLY',
+        error: 'New email arrived on this thread since card loaded — send halted for your review.'
+      };
+    }
+    return { ok: true };
   }
 
   /** Owner-only view: PENDING rows sorted P1 -> P2 -> P3, then oldest first. */
@@ -438,6 +523,7 @@ var DoorwayCore = (function () {
    */
   function checkQueueAction(user, action, row, params) {
     params = params || {};
+    if (action === 'SAFE_APPROVE_SEND') action = 'APPROVE_AND_SEND';
     if (!isOwner(user)) return { ok: false, status: 403, error: 'owner_only' };
     if (!row) return { ok: false, status: 404, error: 'queue_item_not_found' };
     var st = queueStatus(row);
@@ -497,7 +583,7 @@ var DoorwayCore = (function () {
     'Timestamp', 'Source_Module', 'Entity_ID', 'Before_Value', 'After_Value',
     'Pattern_Tag', 'Applied_To_Rules'
   ];
-  var LEARNING_SOURCE_MODULES = ['QUEUE_EDIT', 'PAYROLL_PATCH', 'RULE_UPDATE', 'FEED_IMPORT', 'ENTITY_LINK'];
+  var LEARNING_SOURCE_MODULES = ['QUEUE_EDIT', 'PAYROLL_PATCH', 'RULE_UPDATE', 'FEED_IMPORT', 'ENTITY_LINK', 'QUEUE_VOICE_EDIT', 'QUEUE_SOP_RULE'];
   var CAMPAIGN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_]{0,63}$/;
   var CAMPAIGN_RULE_ALIASES = {
     campaign_id: 'Campaign_ID', campaignid: 'Campaign_ID',
@@ -714,6 +800,8 @@ var DoorwayCore = (function () {
     QUEUE_COLUMNS: QUEUE_COLUMNS, QUEUE_STATUSES: QUEUE_STATUSES, SIGNOFF: SIGNOFF,
     isOwner: isOwner, buildQueue: buildQueue, checkQueueAction: checkQueueAction,
     applyQueuePreview: applyQueuePreview, DRAFT_PREVIEW_MAX: DRAFT_PREVIEW_MAX,
+    INSTRUCT_CHIPS: INSTRUCT_CHIPS, applyInstructDraft: applyInstructDraft,
+    checkInstructDraft: checkInstructDraft, checkStaleThread: checkStaleThread,
     isCarrierRecipient: isCarrierRecipient, carrierRecipients: carrierRecipients,
     ensureSignoff: ensureSignoff, nextQueueId: nextQueueId, hasSourceThread: hasSourceThread,
     CAMPAIGN_RULE_FIELDS: CAMPAIGN_RULE_FIELDS, PAYROLL_LEDGER_COLUMNS: PAYROLL_LEDGER_COLUMNS,

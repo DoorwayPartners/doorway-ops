@@ -28,7 +28,7 @@ test('Campaign_Rules / Payroll_Ledger / Learning_Log headers match the spec', ()
     'Timestamp', 'Source_Module', 'Entity_ID', 'Before_Value', 'After_Value',
     'Pattern_Tag', 'Applied_To_Rules'
   ]);
-  assert.deepEqual(Core.LEARNING_SOURCE_MODULES, ['QUEUE_EDIT', 'PAYROLL_PATCH', 'RULE_UPDATE', 'FEED_IMPORT', 'ENTITY_LINK']);
+  assert.deepEqual(Core.LEARNING_SOURCE_MODULES, ['QUEUE_EDIT', 'PAYROLL_PATCH', 'RULE_UPDATE', 'FEED_IMPORT', 'ENTITY_LINK', 'QUEUE_VOICE_EDIT', 'QUEUE_SOP_RULE']);
 });
 
 test('PATCH_CAMPAIGN_RULES is Owner-only', () => {

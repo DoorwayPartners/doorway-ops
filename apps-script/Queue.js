@@ -5,7 +5,9 @@
  * token is verified and the user is found in Portal_Users):
  *   GET_QUEUE            -> PENDING rows sorted P1 -> P2 -> P3
  *   APPROVE_AND_SEND     -> {queueId, confirm:true, confirmCarrier?, editedTo?, editedCc?, editedSubject?, editedBody?}
+ *   SAFE_APPROVE_SEND    -> same as APPROVE_AND_SEND plus expectedMsgCount, expectedLastMsgId, idempotencyToken
  *   UPDATE_QUEUE_STATUS  -> {queueId, newStatus: 'SNOOZED' | 'DISMISSED'}
+ *   INSTRUCT_DRAFT       -> Owner-only draft rewrite (chip/voice/text). Never sends.
  *
  * Guarantees:
  *   - Owner role only (non-Owner -> 403). Checked here AND in DoorwayCore.checkQueueAction.
@@ -38,6 +40,8 @@ function handleQueueAction_(action, user, req, props) {
     q.status = 200;
     return q;
   }
+  if (action === 'INSTRUCT_DRAFT') return instructDraftAndLogRule_(req || {}, user, props);
+  if (action === 'SAFE_APPROVE_SEND') action = 'APPROVE_AND_SEND';
   if (action !== 'APPROVE_AND_SEND' && action !== 'UPDATE_QUEUE_STATUS') return { status: 400, error: 'bad_action' };
   var queueId = String((req && req.queueId) || '').trim();
   if (!/^Q-\d{8}-\d{3,}$/.test(queueId)) return { status: 400, error: 'bad_queue_id' };
@@ -58,6 +62,16 @@ function handleQueueAction_(action, user, req, props) {
       return { status: 200, queueId: queueId, newStatus: check.newStatus, resolvedAt: now };
     }
 
+    // APPROVE_AND_SEND / SAFE_APPROVE_SEND: confirm + carrier 428 already passed.
+    // Idempotency and stale-thread checks happen BEFORE the row is claimed.
+    var idemKey = sendIdempotencyKey_(req || {});
+    var cache = CacheService.getScriptCache();
+    if (idemKey && cache.get(idemKey)) {
+      return { status: 200, deduped: true, message: 'Already sent (duplicate tap prevented).', queueId: queueId };
+    }
+    var freshness = checkThreadFreshness_(req || {}, hit);
+    if (freshness && freshness.status === 409) return freshness;
+
     // APPROVE_AND_SEND: claim first (at-most-once), with the exact message that goes out.
     var original = { Draft_To: hit.Draft_To, Draft_Cc: hit.Draft_Cc, Draft_Subject: hit.Draft_Subject, Draft_Body: hit.Draft_Body };
     var m = check.send;
@@ -75,6 +89,7 @@ function handleQueueAction_(action, user, req, props) {
       bustBootCache_();
       return { status: 502, error: 'send_failed', message: 'Not sent. The item is back in the queue.' };
     }
+    if (idemKey) cache.put(idemKey, 'SENT', 600);
     var draftDiff = DoorwayCore.queueDraftDiff(hit, req || {});
     if (draftDiff) {
       logLearningSafe_(props, DoorwayCore.buildLearningLogRow({
@@ -184,7 +199,7 @@ function attachQueuePreviews_(q) {
   (q && q.items || []).forEach(function (it) {
     var threadId = isGmailThreadId_(it.Source_Thread_ID) ? String(it.Source_Thread_ID).trim() : '';
     var draftId = String(it.Draft_ID || it.Gmail_Draft_ID || '').trim();
-    var preview = extractThreadAndDraftPreview_(draftId, threadId, it.Context_Summary);
+    var preview = getFullThreadSnapshot_(draftId, threadId, it.Context_Summary);
     DoorwayCore.applyQueuePreview(it, preview);
   });
   return q;
