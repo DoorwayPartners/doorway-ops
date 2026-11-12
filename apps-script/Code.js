@@ -82,6 +82,7 @@ function handle_(idToken, req) {
     // Non-Owners must not receive a queue field.
     if (user.role === 'Owner') {
       var q = DoorwayCore.buildQueue(readQueue_(queueSheetId_(props)).rows);
+      attachQueuePreviews_(q);
       q.status = 200;
       result.body.queue = q;
     }

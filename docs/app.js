@@ -405,12 +405,21 @@
       el('span', { class: 'qrow-title', text: snippet }),
       el('span', { class: 'qrow-chevron', text: '▾' })
     ]);
+    var subject = it.draft_subject || it.Draft_Subject || '(no subject)';
+    var draftBody = it.draft_body || it.Draft_Body || '(no draft yet)';
+    var threadCtx = it.thread_context || it.Context_Summary || '';
+    var threadBox = threadCtx ? el('div', { class: 'q-thread-box', text: threadCtx }) : null;
+    var draftBox = el('details', { class: 'q-draft-box', open: 'open' }, [
+      el('summary', { text: 'Draft: ' + subject }),
+      el('div', { class: 'small', text: 'To: ' + (it.Draft_To || '— (add in Edit Draft)') + (it.Draft_Cc ? ' · Cc: ' + it.Draft_Cc : '') }),
+      el('div', { class: 'small', text: 'Subject: ' + subject }),
+      el('div', { class: 'q-draft-body', text: draftBody })
+    ]);
     var body = el('div', { class: 'qrow-body' }, [
       el('div', { class: 'qfrom', text: it.Rep_Or_Sender || '' }),
-      el('p', { class: 'small', text: it.Context_Summary || '' }),
-      el('div', { class: 'small muted', text: 'To: ' + (it.Draft_To || '— (add in Edit Draft)') + (it.Draft_Cc ? ' · Cc: ' + it.Draft_Cc : '') }),
+      threadBox,
+      draftBox,
       carrierPill,
-      el('details', null, [el('summary', { class: 'small', text: 'Draft: ' + (it.Draft_Subject || '(no subject)') }), el('div', { class: 'pre small', text: it.Draft_Body || '(no draft yet)' })]),
       editBox, msg,
       el('div', { class: 'actions' }, buttons)
     ]);

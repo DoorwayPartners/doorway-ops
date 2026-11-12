@@ -385,6 +385,31 @@ var DoorwayCore = (function () {
   function priorityRank(p) { return PRIORITY_RANK[String(p || '').trim().toUpperCase()] || 9; }
   function queueStatus(row) { return String((row && row.Status) || '').trim().toUpperCase(); }
 
+  var DRAFT_PREVIEW_MAX = 1200;
+  function stripHtmlTags(s) {
+    return String(s == null ? '' : s).replace(/<[^>]*>/g, '');
+  }
+  function firstText_() {
+    for (var i = 0; i < arguments.length; i++) {
+      var s = arguments[i] == null ? '' : String(arguments[i]).trim();
+      if (s) return s;
+    }
+    return '';
+  }
+  /**
+   * Attach draft_subject, draft_body (plain text, max 1,200 chars), and
+   * thread_context on a queue item. `preview` (from Gmail or the raw row)
+   * wins when present; otherwise the staged sheet draft / Context_Summary.
+   */
+  function applyQueuePreview(item, preview) {
+    var row = item || {};
+    var p = preview || {};
+    row.draft_subject = firstText_(p.draft_subject, row.draft_subject, row.Draft_Subject);
+    row.draft_body = stripHtmlTags(firstText_(p.draft_body, row.draft_body, row.Draft_Body)).slice(0, DRAFT_PREVIEW_MAX);
+    row.thread_context = firstText_(p.thread_context, row.thread_context, p.Context_Summary, row.Context_Summary);
+    return row;
+  }
+
   /** Owner-only view: PENDING rows sorted P1 -> P2 -> P3, then oldest first. */
   function buildQueue(rows) {
     var pending = (rows || []).filter(function (r) { return r && r.Queue_ID && queueStatus(r) === 'PENDING'; });
@@ -397,6 +422,7 @@ var DoorwayCore = (function () {
       var o = pick(r, QUEUE_COLUMNS);
       o.Priority = String(r.Priority || '').trim().toUpperCase();
       o.carrierConfirmRequired = isCarrierRecipient(r.Draft_To, r.Draft_Cc);
+      applyQueuePreview(o, r);
       return o;
     });
     var counts = { p1: 0, p2: 0, p3: 0, total: items.length };
@@ -687,6 +713,7 @@ var DoorwayCore = (function () {
     MARGIN_FIELDS: MARGIN_FIELDS, ROLES: ROLES,
     QUEUE_COLUMNS: QUEUE_COLUMNS, QUEUE_STATUSES: QUEUE_STATUSES, SIGNOFF: SIGNOFF,
     isOwner: isOwner, buildQueue: buildQueue, checkQueueAction: checkQueueAction,
+    applyQueuePreview: applyQueuePreview, DRAFT_PREVIEW_MAX: DRAFT_PREVIEW_MAX,
     isCarrierRecipient: isCarrierRecipient, carrierRecipients: carrierRecipients,
     ensureSignoff: ensureSignoff, nextQueueId: nextQueueId, hasSourceThread: hasSourceThread,
     CAMPAIGN_RULE_FIELDS: CAMPAIGN_RULE_FIELDS, PAYROLL_LEDGER_COLUMNS: PAYROLL_LEDGER_COLUMNS,

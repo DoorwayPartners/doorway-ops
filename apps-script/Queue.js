@@ -34,6 +34,7 @@ function handleQueueAction_(action, user, req, props) {
   var sheetId = queueSheetId_(props);
   if (action === 'GET_QUEUE') {
     var q = DoorwayCore.buildQueue(readQueue_(sheetId).rows);
+    attachQueuePreviews_(q);
     q.status = 200;
     return q;
   }
@@ -118,6 +119,75 @@ function sendStaged_(sourceId, m) {
 function bareEmail_(s) {
   var mm = String(s || '').match(/<([^>]+)>/);
   return String(mm ? mm[1] : s || '').trim().toLowerCase();
+}
+
+
+/**
+ * V3.5: enrich Owner queue items with the Gmail draft body and the latest
+ * inbound thread snippet so the UI can render them with no extra round-trip.
+ * Read-only: never sends, never marks mail read. Falls back to the sheet
+ * Context_Summary / staged Draft_* when Gmail is unavailable.
+ */
+function extractThreadAndDraftPreview_(draftId, threadId, fallbackSummary) {
+  var preview = {
+    draft_subject: '',
+    draft_body: '',
+    thread_context: String(fallbackSummary || '').trim()
+  };
+  try {
+    if (draftId) {
+      var draft = GmailApp.getDraft(draftId);
+      if (draft) {
+        var msg = draft.getMessage();
+        preview.draft_subject = msg.getSubject() || '';
+        preview.draft_body = String(msg.getPlainBody() || '').trim().slice(0, 1200);
+        if (!threadId) threadId = msg.getThread().getId();
+      }
+    }
+    if (threadId) {
+      var thread = GmailApp.getThreadById(threadId);
+      if (thread) {
+        var msgs = thread.getMessages();
+        // If no draft id was stored, use the latest draft message on the thread.
+        if (!preview.draft_body) {
+          for (var d = msgs.length - 1; d >= 0; d--) {
+            if (msgs[d].isDraft()) {
+              preview.draft_subject = msgs[d].getSubject() || '';
+              preview.draft_body = String(msgs[d].getPlainBody() || '').trim().slice(0, 1200);
+              break;
+            }
+          }
+        }
+        // Find latest non-draft message for context
+        for (var i = msgs.length - 1; i >= 0; i--) {
+          if (!msgs[i].isDraft()) {
+            var from = msgs[i].getFrom();
+            var dt = Utilities.formatDate(msgs[i].getDate(), 'America/New_York', 'MMM d, h:mm a');
+            var snippet = String(msgs[i].getPlainBody() || '').replace(/\s+/g, ' ').trim().slice(0, 260);
+            preview.thread_context = 'Last msg (' + dt + ' from ' + from + '): ' + snippet;
+            break;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    // Keep fallbackSummary safely on error
+  }
+  return preview;
+}
+
+function isGmailThreadId_(id) {
+  return /^[0-9a-f]{12,20}$/i.test(String(id || '').trim());
+}
+
+function attachQueuePreviews_(q) {
+  (q && q.items || []).forEach(function (it) {
+    var threadId = isGmailThreadId_(it.Source_Thread_ID) ? String(it.Source_Thread_ID).trim() : '';
+    var draftId = String(it.Draft_ID || it.Gmail_Draft_ID || '').trim();
+    var preview = extractThreadAndDraftPreview_(draftId, threadId, it.Context_Summary);
+    DoorwayCore.applyQueuePreview(it, preview);
+  });
+  return q;
 }
 
 /** Read the queue tab with row numbers. Header row 1 must be the A–M columns. */
