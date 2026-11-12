@@ -167,7 +167,8 @@ test('No secrets or real sheet IDs in tracked source', () => {
   for (const f of files) {
     // The public web-app URL (deployment ID) is allowed; nothing else that looks like a Drive/Sheet ID is.
     const t = fs.readFileSync(path.join(__dirname, '..', f), 'utf8')
-      .replace(/https:\/\/script\.google\.com\/macros\/s\/AKfy[A-Za-z0-9_-]+\/exec/g, '');
+      .replace(/https:\/\/script\.google\.com\/macros\/s\/AKfy[A-Za-z0-9_-]+\/exec/g, '')
+      .replace(/[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com/g, ''); // public OAuth client ID
     assert.ok(!/[A-Za-z0-9_-]{40,}/.test(t), `${f} contains a Google-ID-like string (sheet IDs belong in Script Properties)`);
     assert.ok(!/GOCSPX-|AIza[0-9A-Za-z_-]{20,}|-----BEGIN/.test(t), `${f} contains a secret-looking string`);
   }
