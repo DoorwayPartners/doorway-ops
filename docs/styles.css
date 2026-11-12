@@ -1,4 +1,4 @@
-:root{--bg:#f1f5f9;--card:#fff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--brand:#1d4ed8;--good:#059669;--warn:#d97706;--bad:#dc2626}
+:root{--bg:#f1f5f9;--card:#fff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--brand:#1d4ed8;--good:#059669;--warn:#d97706;--bad:#dc2626;--info:#2563eb}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
 .shell{max-width:480px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column}
@@ -30,3 +30,17 @@ main{flex:1;padding:12px;display:flex;flex-direction:column;gap:12px}
 .skeleton{height:120px;border-radius:10px;background:linear-gradient(90deg,#e2e8f0,#f1f5f9,#e2e8f0);background-size:200% 100%;animation:sh 1.2s infinite}
 @keyframes sh{to{background-position:-200% 0}}
 .foot{text-align:center;padding:14px}
+.stat.info .stat-v{color:var(--info)}.pill.info{background:#dbeafe;color:#1e40af}
+.vtabs{display:flex;gap:6px}.vtab{flex:1;padding:9px 0;border-radius:10px;border:1px solid var(--line);background:#fff;font-weight:600;color:var(--ink)}
+.vtab.active{background:#0f172a;color:#fff;border-color:#0f172a}
+.qwrap{display:flex;flex-direction:column;gap:12px}.qcard{display:flex;flex-direction:column;gap:6px}.qcard.gone{opacity:.35}
+.qfrom{font-weight:600}.qcard p{margin:0}.qcard details summary{cursor:pointer;color:var(--brand)}
+.pre{white-space:pre-wrap;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:6px}
+.actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:4px}
+.btn.primary{grid-column:1/-1;background:#0f172a;color:#fff;padding:11px}.btn.line{background:#fff;border:1px solid var(--line);color:var(--ink)}
+.btn:disabled{opacity:.5}
+.editbox{display:flex;flex-direction:column;gap:6px}.field{display:flex;flex-direction:column;gap:2px}
+.field input,.field textarea{font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;width:100%}
+p.bad{color:var(--bad)}
+.toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#0f172a;color:#fff;padding:10px 16px;border-radius:999px;font-size:13.5px;z-index:20}
+.toast.good{background:var(--good)}

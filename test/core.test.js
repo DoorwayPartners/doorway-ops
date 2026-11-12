@@ -266,3 +266,12 @@ test('Dashboard payloads never include queue data, for any role', () => {
     for (const k of ['queue', 'items', 'Draft_Body', 'Draft_To', 'Queue_ID']) assert.ok(!s.keys.has(k), `${email} payload has ${k}`);
   }
 });
+
+test('Frontend: queue tab is gated to the Owner role and never uses innerHTML', () => {
+  const app = fs.readFileSync(path.join(__dirname, '../docs/app.js'), 'utf8');
+  assert.ok(!/\.innerHTML\s*=|insertAdjacentHTML|document\.write/.test(app), 'app.js must not inject HTML');
+  assert.match(app, /if \(d\.role === 'Owner'\) \{[^}]*viewTabs\(\)/, 'viewTabs only for Owner');
+  assert.equal((app.match(/appendChild\(viewTabs\(\)\)/g) || []).length, 1, 'viewTabs rendered in one place');
+  assert.match(app, /carrierRecipients\(to, cc\)[\s\S]*confirmCarrier = true/, 'second confirm for carriers');
+  assert.match(app, /confirm: true/, 'explicit confirm flag sent');
+});

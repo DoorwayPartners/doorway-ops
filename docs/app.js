@@ -148,9 +148,129 @@
     ].filter(Boolean);
   }
 
+  // ---------- V2: Owner Priority Queue (Owner role only) ----------
+  var view = 'queue'; // Owner default landing tab
+  var lastDash = null;
+  var PRI_TONE = { 'P1-URGENT': 'bad', 'P2-OPS': 'warn', 'P3-ADMIN': 'info' };
+  var PRI_LABEL = { 'P1-URGENT': 'P1 Urgent', 'P2-OPS': 'P2 Field Ops', 'P3-ADMIN': 'P3 Admin' };
+
+  function apiPost(payload) {
+    payload.idToken = idToken;
+    return fetch(CFG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload), redirect: 'follow', credentials: 'omit' })
+      .then(function (r) { return r.json(); });
+  }
+  // Demo mode runs the same server-side checks (DoorwayCore) against fake rows; nothing is sent.
+  function demoQueueAction(p) {
+    var rows = DOORWAY_DEMO.raw.queue, row = null;
+    if (p.action === 'GET_QUEUE') { var q = DoorwayCore.buildQueue(rows); q.status = 200; return q; }
+    for (var i = 0; i < rows.length; i++) if (rows[i].Queue_ID === p.queueId) row = rows[i];
+    var chk = DoorwayCore.checkQueueAction({ role: 'Owner' }, p.action, row, p);
+    if (!chk.ok) return { status: chk.status, error: chk.error, carrier: chk.carrier };
+    if (p.action === 'UPDATE_QUEUE_STATUS') { row.Status = chk.newStatus; return { status: 200, newStatus: chk.newStatus }; }
+    row.Status = 'APPROVED_SENT';
+    return { status: 200, sent: true, demo: true, to: chk.send.to };
+  }
+  function queueApi(payload) { return DEMO ? Promise.resolve(demoQueueAction(payload)) : apiPost(payload); }
+
+  function toast(text, tone) {
+    var t = el('div', { class: 'toast ' + (tone || ''), text: text });
+    document.body.appendChild(t);
+    setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 3500);
+  }
+  function viewTabs() {
+    function b(label, v) {
+      return el('button', { type: 'button', class: 'vtab' + (view === v ? ' active' : ''), text: label, onclick: function () { view = v; render(lastDash); } });
+    }
+    return el('div', { class: 'vtabs' }, [b('Priority Queue', 'queue'), b('Dashboard', 'dash')]);
+  }
+  function renderQueueView() {
+    var box = el('div', { class: 'qwrap' }, [card('Loading queue…', [el('div', { class: 'skeleton' })])]);
+    main.appendChild(box);
+    queueApi({ action: 'GET_QUEUE' }).then(function (q) {
+      box.textContent = '';
+      if (q.status !== 200) { box.appendChild(card('Queue unavailable', [el('p', { class: 'muted', text: 'Could not load the queue (' + (q.error || q.status) + ').' })])); return; }
+      var c = q.counts;
+      box.appendChild(grid([stat('P1 Urgent', c.p1, null, 'bad'), stat('P2 Field Ops', c.p2, null, 'warn'), stat('P3 Admin', c.p3, null, 'info')], 3));
+      if (!q.items.length) { box.appendChild(card(null, [empty('Nothing waiting for approval.')], 'center')); return; }
+      q.items.forEach(function (it) { box.appendChild(queueCard(it)); });
+    }).catch(function () {
+      box.textContent = '';
+      box.appendChild(card('Connection problem', [el('p', { class: 'muted', text: 'Could not reach the Doorway Ops server.' })]));
+    });
+  }
+  function field(label, node) { return el('label', { class: 'field' }, [el('span', { class: 'small muted', text: label }), node]); }
+  function queueCard(it) {
+    var editing = false;
+    var inTo = el('input', { type: 'email', multiple: 'multiple', value: it.Draft_To || '' });
+    var inCc = el('input', { type: 'text', value: it.Draft_Cc || '' });
+    var inSubj = el('input', { type: 'text', value: it.Draft_Subject || '' });
+    var inBody = el('textarea', { rows: '8' }); inBody.value = it.Draft_Body || '';
+    var editBox = el('div', { class: 'editbox hidden' }, [field('To', inTo), field('Cc', inCc), field('Subject', inSubj), field('Body', inBody)]);
+    var msg = el('p', { class: 'small hidden' });
+    var carrierPill = el('span', { class: 'pill bad' + (it.carrierConfirmRequired ? '' : ' hidden'), text: 'Carrier recipient · double confirm' });
+    var btnSend = el('button', { type: 'button', class: 'btn primary', text: 'Approve & Send' });
+    var btnEdit = el('button', { type: 'button', class: 'btn line', text: 'Edit Draft' });
+    var btnSnooze = el('button', { type: 'button', class: 'btn line', text: 'Snooze' });
+    var btnDismiss = el('button', { type: 'button', class: 'btn line', text: 'Dismiss' });
+    var buttons = [btnSend, btnEdit, btnSnooze, btnDismiss];
+    var node = card(null, [
+      el('div', { class: 'row-between' }, [el('span', { class: 'pill ' + (PRI_TONE[it.Priority] || ''), text: PRI_LABEL[it.Priority] || it.Priority || '—' }), el('span', { class: 'small muted', text: (it.Category || '') + ' · ' + (it.Queue_ID || '') })]),
+      el('div', { class: 'qfrom', text: it.Rep_Or_Sender || '' }),
+      el('p', { class: 'small', text: it.Context_Summary || '' }),
+      el('div', { class: 'small muted', text: 'To: ' + (it.Draft_To || '— (add in Edit Draft)') + (it.Draft_Cc ? ' · Cc: ' + it.Draft_Cc : '') }),
+      carrierPill,
+      el('details', null, [el('summary', { class: 'small', text: 'Draft: ' + (it.Draft_Subject || '(no subject)') }), el('div', { class: 'pre small', text: it.Draft_Body || '(no draft yet)' })]),
+      editBox, msg,
+      el('div', { class: 'actions' }, buttons)
+    ], 'qcard');
+    function busy(on) { buttons.forEach(function (b) { b.disabled = on; }); }
+    function say(text, tone) { msg.textContent = text; msg.className = 'small ' + (tone || ''); }
+    function done(text) { node.classList.add('gone'); toast(text, 'good'); setTimeout(function () { render(lastDash); }, 600); }
+    btnEdit.addEventListener('click', function () {
+      editing = !editing; editBox.classList.toggle('hidden', !editing); btnEdit.textContent = editing ? 'Cancel edit' : 'Edit Draft';
+    });
+    btnSend.addEventListener('click', function () {
+      var to = editing && inTo.value.trim() ? inTo.value.trim() : (it.Draft_To || '');
+      var cc = editing ? inCc.value.trim() : (it.Draft_Cc || '');
+      var subj = editing && inSubj.value.trim() ? inSubj.value.trim() : (it.Draft_Subject || '');
+      if (!to) return say('Add a recipient in Edit Draft first.', 'bad');
+      if (!window.confirm('Send this email now from Cristian@doorwaypartners.com?\n\nTo: ' + to + (cc ? '\nCc: ' + cc : '') + '\nSubject: ' + subj)) return;
+      var payload = { action: 'APPROVE_AND_SEND', queueId: it.Queue_ID, confirm: true };
+      if (editing) { payload.editedTo = inTo.value; payload.editedCc = inCc.value; payload.editedSubject = inSubj.value; payload.editedBody = inBody.value; }
+      var carrier = DoorwayCore.carrierRecipients(to, cc);
+      if (carrier.length) {
+        if (!window.confirm('CARRIER RECIPIENT: ' + carrier.join(', ') + '\n\nThis email goes to a carrier. Tap OK again only if you are sure.')) return;
+        payload.confirmCarrier = true;
+      }
+      busy(true); say('Sending…');
+      queueApi(payload).then(function (r) {
+        if (r.status === 200) return done((r.demo ? 'Demo: would send to ' : 'Sent to ') + (r.to || to));
+        busy(false);
+        if (r.status === 428) return say('Carrier recipient needs the second confirm. Nothing was sent.', 'bad');
+        if (r.status === 409) return say('Already handled. Nothing was sent again.', 'bad');
+        say('Not sent (' + (r.error || r.status) + ').', 'bad');
+      }).catch(function () { busy(false); say('Connection problem. Not confirmed as sent; reload before retrying.', 'bad'); });
+    });
+    function setStatus(ns, verb) {
+      busy(true);
+      queueApi({ action: 'UPDATE_QUEUE_STATUS', queueId: it.Queue_ID, newStatus: ns }).then(function (r) {
+        if (r.status === 200) return done(verb);
+        busy(false); say('Could not update (' + (r.error || r.status) + ').', 'bad');
+      }).catch(function () { busy(false); say('Connection problem.', 'bad'); });
+    }
+    btnSnooze.addEventListener('click', function () { setStatus('SNOOZED', 'Snoozed'); });
+    btnDismiss.addEventListener('click', function () { if (window.confirm('Dismiss this item?')) setStatus('DISMISSED', 'Dismissed'); });
+    return node;
+  }
+
   function render(d) {
+    lastDash = d;
     main.textContent = '';
     document.getElementById('whoami').textContent = d.me.name + ' · ' + d.role + ' · as of ' + d.asOf;
+    if (d.role === 'Owner') { // queue tab exists for the Owner role only; the API enforces it too
+      main.appendChild(viewTabs());
+      if (view === 'queue') return renderQueueView();
+    }
     var kids = d.role === 'Rep' ? renderRep(d) : d.role === 'Manager' ? renderManager(d) : renderExec(d);
     kids.forEach(function (k) { main.appendChild(k); });
   }
