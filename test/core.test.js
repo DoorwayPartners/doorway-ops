@@ -163,7 +163,7 @@ test('Site copy of core is identical to the Apps Script core (run npm run build)
 });
 
 test('No secrets or real sheet IDs in tracked source', () => {
-  const files = ['apps-script/Code.js', 'apps-script/Core.js', 'docs/app.js', 'docs/config.js', 'docs/index.html'];
+  const files = ['apps-script/Code.js', 'apps-script/Core.js', 'apps-script/Queue.js', 'docs/demo-data.js', 'docs/app.js', 'docs/config.js', 'docs/index.html'];
   for (const f of files) {
     // The public web-app URL (deployment ID) is allowed; nothing else that looks like a Drive/Sheet ID is.
     const t = fs.readFileSync(path.join(__dirname, '..', f), 'utf8')
@@ -171,5 +171,98 @@ test('No secrets or real sheet IDs in tracked source', () => {
       .replace(/[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com/g, ''); // public OAuth client ID
     assert.ok(!/[A-Za-z0-9_-]{40,}/.test(t), `${f} contains a Google-ID-like string (sheet IDs belong in Script Properties)`);
     assert.ok(!/GOCSPX-|AIza[0-9A-Za-z_-]{20,}|-----BEGIN/.test(t), `${f} contains a secret-looking string`);
+  }
+});
+
+// ---------------- V2 Owner Priority Queue ----------------
+const OWNER = { role: 'Owner', email: 'owner@demo.example', name: 'Olivia Owner (Demo)' };
+const qrow = (extra) => Object.assign({ Queue_ID: 'Q-20261112-001', Created_At: '2026-11-12T09:00:00', Priority: 'P2-OPS', Category: 'Missed_Install',
+  Source_Thread_ID: '', Rep_Or_Sender: 'Riley Rep (Demo)', Context_Summary: 'demo', Draft_To: 'rep@demo.example', Draft_Cc: '',
+  Draft_Subject: 'Follow up', Draft_Body: 'Hi Riley', Status: 'PENDING', Resolved_At: '' }, extra || {});
+
+test('Queue has exactly the A–M spec columns', () => {
+  assert.deepEqual(Core.QUEUE_COLUMNS, ['Queue_ID', 'Created_At', 'Priority', 'Category', 'Source_Thread_ID', 'Rep_Or_Sender',
+    'Context_Summary', 'Draft_To', 'Draft_Cc', 'Draft_Subject', 'Draft_Body', 'Status', 'Resolved_At']);
+});
+
+test('buildQueue: PENDING only, sorted P1 -> P2 -> P3 then oldest, counts, carrier flag', () => {
+  const q = Core.buildQueue(DEMO.raw.queue);
+  assert.ok(q.items.every((i) => i.Status === 'PENDING'));
+  const ranks = q.items.map((i) => i.Priority);
+  assert.deepEqual(ranks, [...ranks].sort());
+  assert.equal(q.counts.total, q.items.length);
+  assert.equal(q.counts.p1 + q.counts.p2 + q.counts.p3, q.items.length);
+  assert.ok(!q.items.some((i) => i.Queue_ID === 'Q-20261111-004'), 'sent row hidden');
+  const carrierItem = q.items.find((i) => /fidium/i.test(i.Draft_To));
+  assert.equal(carrierItem.carrierConfirmRequired, true);
+  assert.ok(q.items.some((i) => i.carrierConfirmRequired === false));
+});
+
+test('Carrier domains need a second confirm; lookalikes do not', () => {
+  for (const e of ['DSREscalations@fidium.com', 'x@consolidated.com', 'a@metronet.net', 'b@brightspeed.com', 'c@frontier.com',
+    'd@att.com', 'e@t-mobile.com', 'f@gonetspeed.com', 'g@mail.fidium.net'])
+    assert.ok(Core.isCarrierRecipient(e, ''), e);
+  assert.ok(Core.isCarrierRecipient('rep@demo.example', 'brian.dorton@fidium.com'), 'cc counts');
+  for (const e of ['bob@matt.com', 'randy@coast2coasttechnologies.org', 'office@doorwaypartners.com', 'x@frontierdemo.example'])
+    assert.ok(!Core.isCarrierRecipient(e, ''), e);
+});
+
+test('Queue actions are Owner-only (Admin/Manager/Rep/none -> 403)', () => {
+  for (const role of ['Admin', 'Manager', 'Rep']) {
+    assert.equal(Core.checkQueueAction({ role }, 'APPROVE_AND_SEND', qrow(), { confirm: true }).status, 403);
+    assert.equal(Core.checkQueueAction({ role }, 'UPDATE_QUEUE_STATUS', qrow(), { newStatus: 'DISMISSED' }).status, 403);
+  }
+  assert.equal(Core.checkQueueAction(null, 'APPROVE_AND_SEND', qrow(), { confirm: true }).status, 403);
+  assert.equal(Core.isOwner(Core.findUser([{ Email: 'o@x.example', Role: 'OWNER', Active: true, Name: 'O' }], 'o@x.example')), true, "spec 'OWNER' spelling works");
+});
+
+test('APPROVE_AND_SEND: explicit confirm, staged draft only, exactly once, sign-off', () => {
+  assert.equal(Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', qrow(), {}).error, 'explicit_confirm_required');
+  const ok = Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', qrow(), { confirm: true });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.send.to, 'rep@demo.example');
+  assert.ok(ok.send.body.endsWith(Core.SIGNOFF));
+  const signed = Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', qrow({ Draft_Body: 'Hi\n\nCristian Coy\nCoast 2 Coast / Doorway Partners' }), { confirm: true });
+  assert.ok(!signed.send.body.endsWith('\n\n' + Core.SIGNOFF), 'no double sign-off');
+  assert.equal(Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', qrow({ Status: 'APPROVED_SENT' }), { confirm: true }).status, 409);
+  assert.equal(Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', qrow({ Status: 'DISMISSED' }), { confirm: true }).status, 409);
+  assert.equal(Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', null, { confirm: true }).status, 404);
+  assert.equal(Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', qrow({ Draft_To: '' }), { confirm: true }).error, 'no_recipient');
+  assert.equal(Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', qrow({ Draft_To: 'not-an-email' }), { confirm: true }).error, 'bad_recipient');
+  assert.equal(Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', qrow({ Draft_Body: '' }), { confirm: true }).error, 'no_body');
+  const edited = Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', qrow(), { confirm: true, editedSubject: 'New subj', editedCc: 'x@demo.example' });
+  assert.equal(edited.send.subject, 'New subj');
+  assert.equal(edited.send.cc, 'x@demo.example');
+});
+
+test('APPROVE_AND_SEND to a carrier needs confirmCarrier (also when added by an edit)', () => {
+  const row = qrow({ Draft_To: 'DSREscalations@fidium.com' });
+  const r = Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', row, { confirm: true });
+  assert.equal(r.status, 428);
+  assert.deepEqual(r.carrier, ['DSREscalations@fidium.com']);
+  assert.equal(Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', row, { confirm: true, confirmCarrier: true }).ok, true);
+  assert.equal(Core.checkQueueAction(OWNER, 'APPROVE_AND_SEND', qrow(), { confirm: true, editedCc: 'brian.dorton@fidium.com' }).status, 428);
+});
+
+test('UPDATE_QUEUE_STATUS: only SNOOZED/DISMISSED, never on a sent row', () => {
+  assert.equal(Core.checkQueueAction(OWNER, 'UPDATE_QUEUE_STATUS', qrow(), { newStatus: 'snoozed' }).newStatus, 'SNOOZED');
+  assert.equal(Core.checkQueueAction(OWNER, 'UPDATE_QUEUE_STATUS', qrow({ Status: 'SNOOZED' }), { newStatus: 'DISMISSED' }).ok, true);
+  assert.equal(Core.checkQueueAction(OWNER, 'UPDATE_QUEUE_STATUS', qrow(), { newStatus: 'APPROVED_SENT' }).error, 'bad_status');
+  assert.equal(Core.checkQueueAction(OWNER, 'UPDATE_QUEUE_STATUS', qrow(), { newStatus: 'PENDING' }).error, 'bad_status');
+  assert.equal(Core.checkQueueAction(OWNER, 'UPDATE_QUEUE_STATUS', qrow({ Status: 'APPROVED_SENT' }), { newStatus: 'DISMISSED' }).status, 409);
+  assert.equal(Core.checkQueueAction(OWNER, 'NUKE', qrow(), {}).status, 400);
+});
+
+test('Queue IDs and duplicate detection', () => {
+  assert.equal(Core.nextQueueId([], '20261112'), 'Q-20261112-001');
+  assert.equal(Core.nextQueueId([{ Queue_ID: 'Q-20261112-009' }, { Queue_ID: 'Q-20261111-050' }], '20261112'), 'Q-20261112-010');
+  assert.equal(Core.hasSourceThread([{ Source_Thread_ID: '18abc' }], '18abc'), true);
+  assert.equal(Core.hasSourceThread([{ Source_Thread_ID: '18abc' }], ''), false);
+});
+
+test('Dashboard payloads never include queue data, for any role', () => {
+  for (const email of ['owner@demo.example', 'admin@demo.example', 'manager@demo.example', 'rep@demo.example']) {
+    const s = scan(Core.buildPayload(email, raw(), T).body);
+    for (const k of ['queue', 'items', 'Draft_Body', 'Draft_To', 'Queue_ID']) assert.ok(!s.keys.has(k), `${email} payload has ${k}`);
   }
 });

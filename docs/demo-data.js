@@ -69,10 +69,16 @@ var DOORWAY_DEMO = (function () {
     { Date: '2026-11-03', Vendor: 'Demo Stays', Category: 'Lodging', 'Trip/Market': 'Demo Market', Amount: '$60.00', Payment_Method: 'Demo card', Source_Email_Id: 'demo', Notes: 'fake' },
     { Date: '2026-11-08', Vendor: 'Demo Fuel', Category: 'Fuel', 'Trip/Market': 'Demo Market', Amount: '$25.00', Payment_Method: 'Demo card', Source_Email_Id: 'demo', Notes: 'fake' }
   ];
+  var queue = [
+    { Queue_ID: 'Q-20261112-001', Created_At: '2026-11-12T08:05:00', Priority: 'P2-OPS', Category: 'Missed_Install', Source_Thread_ID: 'Order_Ledger!R12', Rep_Or_Sender: 'Riley Rep (Demo) <rep@demo.example>', Context_Summary: 'DEMO-1003 passed its install date yesterday without completion. Check in with the rep before the customer cancels.', Draft_To: 'rep@demo.example', Draft_Cc: '', Draft_Subject: 'DEMO-1003 install follow-up', Draft_Body: 'Hi Riley,\n\nDEMO-1003 passed its install date. Can you check in with the customer today?', Status: 'PENDING', Resolved_At: '' },
+    { Queue_ID: 'Q-20261112-002', Created_At: '2026-11-12T09:40:00', Priority: 'P1-URGENT', Category: 'Escalation', Source_Thread_ID: 'demo-thread', Rep_Or_Sender: 'Demo Customer Z (help@)', Context_Summary: 'Customer reports a missed install window. Care was contacted; order DEMO-1009 needs an escalation today.', Draft_To: 'escalations@fidium.example.fidium.com', Draft_Cc: 'office@demo.example', Draft_Subject: 'Escalation: DEMO-1009 missed install', Draft_Body: 'Hello team,\n\nOrder DEMO-1009 missed its install window. Care was contacted. Please advise.', Status: 'PENDING', Resolved_At: '' },
+    { Queue_ID: 'Q-20261112-003', Created_At: '2026-11-12T10:15:00', Priority: 'P3-ADMIN', Category: 'Recruit_App', Source_Thread_ID: 'demo-thread-2', Rep_Or_Sender: 'Demo Applicant <applicant@demo.example>', Context_Summary: 'New /join/ application from a demo applicant in Sampleton. Wants interview this week.', Draft_To: 'applicant@demo.example', Draft_Cc: '', Draft_Subject: 'Your Doorway Partners application', Draft_Body: 'Hi,\n\nThanks for applying. Are you free for a 15-minute call tomorrow?', Status: 'PENDING', Resolved_At: '' },
+    { Queue_ID: 'Q-20261111-004', Created_At: '2026-11-11T15:00:00', Priority: 'P1-URGENT', Category: 'Escalation', Source_Thread_ID: 'demo-thread-3', Rep_Or_Sender: 'Demo', Context_Summary: 'Already handled.', Draft_To: 'rep@demo.example', Draft_Cc: '', Draft_Subject: 'Done', Draft_Body: 'Done', Status: 'APPROVED_SENT', Resolved_At: '2026-11-11T15:10:00-05:00' }
+  ];
   return {
     TODAY: TODAY,
     raw: { users: users, orders: orders, compliance: compliance, scorecard: scorecard, exceptions: exceptions,
-      day14: day14, permits: permits, phantom: phantom, expenses: expenses },
+      day14: day14, permits: permits, phantom: phantom, expenses: expenses, queue: queue },
     emails: { Owner: 'owner@demo.example', Admin: 'admin@demo.example', Manager: 'manager@demo.example', Rep: 'rep@demo.example' }
   };
 })();

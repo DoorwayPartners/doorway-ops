@@ -354,9 +354,113 @@ var DoorwayCore = (function () {
     return { status: 200, body: body };
   }
 
+  // ---------- V2: Owner Priority Queue (Ops_Approval_Queue tab, columns A–M) ----------
+  var QUEUE_COLUMNS = ['Queue_ID', 'Created_At', 'Priority', 'Category', 'Source_Thread_ID',
+    'Rep_Or_Sender', 'Context_Summary', 'Draft_To', 'Draft_Cc', 'Draft_Subject', 'Draft_Body',
+    'Status', 'Resolved_At'];
+  var PRIORITY_RANK = { 'P1-URGENT': 1, 'P2-OPS': 2, 'P3-ADMIN': 3 };
+  var QUEUE_STATUSES = ['PENDING', 'APPROVED_SENT', 'SNOOZED', 'DISMISSED'];
+  var SIGNOFF = 'Cristian Coy, Coast 2 Coast / Doorway Partners';
+  // Recipient domains that count as a carrier / carrier partner. Any match needs a
+  // second explicit confirmation before APPROVE_AND_SEND (UI and server both check).
+  var CARRIER_DOMAIN_RE = /(^|[.@-])(fidium|consolidated|consolidatedcommunications|metronet|brightspeed|frontier|frontiercomm|ftr|att|t-mobile|tmobile|gonetspeed|verizon|spectrum|charter|comcast|xfinity|breezeline|tds|tdstelecom|cox|lumen|centurylink|windstream|kinetic|ziply|optimum|altice|mountainhigh|mtnhigh)\.[a-z.]+$/i;
+  var EMAIL_RE = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[A-Za-z]{2,}$/;
+
+  function isOwner(user) { return !!user && user.role === 'Owner'; }
+  function splitEmails(v) {
+    return String(v == null ? '' : v).split(/[,;\s]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+  function carrierRecipients(to, cc) {
+    return splitEmails(to).concat(splitEmails(cc)).filter(function (e) {
+      var at = e.lastIndexOf('@');
+      return at > 0 && CARRIER_DOMAIN_RE.test(e.slice(at).toLowerCase());
+    });
+  }
+  function isCarrierRecipient(to, cc) { return carrierRecipients(to, cc).length > 0; }
+  function ensureSignoff(body) {
+    var b = String(body == null ? '' : body).replace(/\s+$/, '');
+    if (norm(b).indexOf(norm('Cristian Coy')) >= 0 && norm(b).indexOf(norm('Doorway Partners')) >= 0) return b;
+    return b + '\n\n' + SIGNOFF;
+  }
+  function priorityRank(p) { return PRIORITY_RANK[String(p || '').trim().toUpperCase()] || 9; }
+  function queueStatus(row) { return String((row && row.Status) || '').trim().toUpperCase(); }
+
+  /** Owner-only view: PENDING rows sorted P1 -> P2 -> P3, then oldest first. */
+  function buildQueue(rows) {
+    var pending = (rows || []).filter(function (r) { return r && r.Queue_ID && queueStatus(r) === 'PENDING'; });
+    pending.sort(function (a, b) {
+      return priorityRank(a.Priority) - priorityRank(b.Priority) ||
+        String(a.Created_At || '').localeCompare(String(b.Created_At || '')) ||
+        String(a.Queue_ID).localeCompare(String(b.Queue_ID));
+    });
+    var items = pending.map(function (r) {
+      var o = pick(r, QUEUE_COLUMNS);
+      o.Priority = String(r.Priority || '').trim().toUpperCase();
+      o.carrierConfirmRequired = isCarrierRecipient(r.Draft_To, r.Draft_Cc);
+      return o;
+    });
+    var counts = { p1: 0, p2: 0, p3: 0, total: items.length };
+    items.forEach(function (i) { var k = priorityRank(i.Priority); if (k === 1) counts.p1++; else if (k === 2) counts.p2++; else if (k === 3) counts.p3++; });
+    return { items: items, counts: counts };
+  }
+
+  /**
+   * Validate a queue write BEFORE anything is changed or sent. Pure; the backend
+   * calls it inside a script lock with the freshly re-read row.
+   * action: 'APPROVE_AND_SEND' | 'UPDATE_QUEUE_STATUS'
+   * Returns {ok:true, send:{to,cc,subject,body}, carrier:[...]} or {ok:false, status, error}.
+   */
+  function checkQueueAction(user, action, row, params) {
+    params = params || {};
+    if (!isOwner(user)) return { ok: false, status: 403, error: 'owner_only' };
+    if (!row) return { ok: false, status: 404, error: 'queue_item_not_found' };
+    var st = queueStatus(row);
+    if (st === 'APPROVED_SENT') return { ok: false, status: 409, error: 'already_sent' };
+    if (action === 'UPDATE_QUEUE_STATUS') {
+      var ns = String(params.newStatus || '').trim().toUpperCase();
+      if (ns !== 'SNOOZED' && ns !== 'DISMISSED') return { ok: false, status: 400, error: 'bad_status' };
+      if (st !== 'PENDING' && st !== 'SNOOZED') return { ok: false, status: 409, error: 'not_pending' };
+      return { ok: true, newStatus: ns };
+    }
+    if (action !== 'APPROVE_AND_SEND') return { ok: false, status: 400, error: 'bad_action' };
+    if (st !== 'PENDING') return { ok: false, status: 409, error: 'not_pending' };
+    if (params.confirm !== true) return { ok: false, status: 400, error: 'explicit_confirm_required' };
+    var pickField = function (edited, staged) { return edited != null && String(edited).trim() !== '' ? String(edited).trim() : String(staged == null ? '' : staged).trim(); };
+    var to = splitEmails(pickField(params.editedTo, row.Draft_To));
+    var cc = splitEmails(params.editedCc != null ? params.editedCc : row.Draft_Cc);
+    var subject = pickField(params.editedSubject, row.Draft_Subject);
+    var body = pickField(params.editedBody, row.Draft_Body);
+    if (!to.length) return { ok: false, status: 400, error: 'no_recipient' };
+    var bad = to.concat(cc).filter(function (e) { return !EMAIL_RE.test(e); });
+    if (bad.length) return { ok: false, status: 400, error: 'bad_recipient', detail: bad };
+    if (!subject) return { ok: false, status: 400, error: 'no_subject' };
+    if (!body) return { ok: false, status: 400, error: 'no_body' };
+    var carrier = carrierRecipients(to.join(','), cc.join(','));
+    if (carrier.length && params.confirmCarrier !== true) return { ok: false, status: 428, error: 'carrier_confirm_required', carrier: carrier };
+    return { ok: true, carrier: carrier, send: { to: to.join(', '), cc: cc.join(', '), subject: subject, body: ensureSignoff(body) } };
+  }
+
+  /** Next Queue_ID for a day: Q-YYYYMMDD-### (dedupe-safe against existing IDs). */
+  function nextQueueId(rows, ymdCompact) {
+    var prefix = 'Q-' + ymdCompact + '-', max = 0;
+    (rows || []).forEach(function (r) {
+      var id = String((r && r.Queue_ID) || '');
+      if (id.indexOf(prefix) === 0) { var n = parseInt(id.slice(prefix.length), 10); if (n > max) max = n; }
+    });
+    return prefix + ('00' + (max + 1)).slice(-3);
+  }
+  function hasSourceThread(rows, sourceId) {
+    var s = String(sourceId || '').trim();
+    return !!s && (rows || []).some(function (r) { return String((r && r.Source_Thread_ID) || '').trim() === s; });
+  }
+
   return {
     buildPayload: buildPayload, validateClaims: validateClaims, findUser: findUser,
     MARGIN_FIELDS: MARGIN_FIELDS, ROLES: ROLES,
+    QUEUE_COLUMNS: QUEUE_COLUMNS, QUEUE_STATUSES: QUEUE_STATUSES, SIGNOFF: SIGNOFF,
+    isOwner: isOwner, buildQueue: buildQueue, checkQueueAction: checkQueueAction,
+    isCarrierRecipient: isCarrierRecipient, carrierRecipients: carrierRecipients,
+    ensureSignoff: ensureSignoff, nextQueueId: nextQueueId, hasSourceThread: hasSourceThread,
     _internals: { money: money, toDate: toDate, cityOf: cityOf, townOf: townOf, workingDaysMTD: workingDaysMTD, truthy: truthy }
   };
 })();

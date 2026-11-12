@@ -10,7 +10,8 @@
  *   4. The verified email is looked up in Portal_Users. Unknown or inactive -> 403.
  *   5. DoorwayCore.buildPayload returns ONLY the fields that role may see.
  *
- * V1 is strictly READ-ONLY: this file never writes to any spreadsheet.
+ * The dashboard read path never writes. The only writes are the V2 Owner-only
+ * queue actions in Queue.js (Ops_Approval_Queue tab: status, Resolved_At, edited draft).
  *
  * Script Properties (Project Settings > Script properties) — no IDs in code:
  *   OAUTH_CLIENT_ID     e.g. 1234-abc.apps.googleusercontent.com
@@ -36,16 +37,16 @@ var TZ = 'America/New_York';
 function doGet(e) {
   var token = e && e.parameter && e.parameter.idToken;
   if (!token) return json_({ status: 200, service: 'doorway-ops', message: 'POST {"idToken": "..."} to read your dashboard.' });
-  return handle_(token);
+  return handle_(token, {}); // GET never runs queue actions
 }
 
 function doPost(e) {
-  var token = null;
-  try { token = JSON.parse((e && e.postData && e.postData.contents) || '{}').idToken; } catch (err) { token = null; }
-  return handle_(token);
+  var req = {};
+  try { req = JSON.parse((e && e.postData && e.postData.contents) || '{}') || {}; } catch (err) { req = {}; }
+  return handle_(req.idToken, req);
 }
 
-function handle_(idToken) {
+function handle_(idToken, req) {
   try {
     if (!idToken) return json_({ status: 401, error: 'missing_token' });
     var props = PropertiesService.getScriptProperties();
@@ -56,6 +57,10 @@ function handle_(idToken) {
     // Fail closed before reading anything else.
     var user = DoorwayCore.findUser(raw.users, check.email);
     if (!user) return json_({ status: 403, error: 'forbidden', message: 'This Google account is not on the Doorway Ops access list.' });
+
+    // V2 Owner Priority Queue actions (POST only). Owner role is re-checked in Queue.js.
+    var action = req && req.action ? String(req.action) : '';
+    if (action) return json_(handleQueueAction_(action, user, req, props));
 
     loadData_(raw, props, user.role);
     var today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
