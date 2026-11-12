@@ -471,7 +471,7 @@ var DoorwayCore = (function () {
     'Timestamp', 'Source_Module', 'Entity_ID', 'Before_Value', 'After_Value',
     'Pattern_Tag', 'Applied_To_Rules'
   ];
-  var LEARNING_SOURCE_MODULES = ['QUEUE_EDIT', 'PAYROLL_PATCH', 'RULE_UPDATE'];
+  var LEARNING_SOURCE_MODULES = ['QUEUE_EDIT', 'PAYROLL_PATCH', 'RULE_UPDATE', 'FEED_IMPORT', 'ENTITY_LINK'];
   var CAMPAIGN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_]{0,63}$/;
   var CAMPAIGN_RULE_ALIASES = {
     campaign_id: 'Campaign_ID', campaignid: 'Campaign_ID',

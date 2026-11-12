@@ -6,3 +6,6 @@
 !Queue.js
 !BootCache.js
 !Rules.js
+!PdfEngine.js
+!FeedImporter.js
+!EntityLinker.js

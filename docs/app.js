@@ -327,6 +327,11 @@
       hudTile('Installed / Pipeline', pipe, ''),
       hudTile('Exceptions & Holds', holds, holds ? 'bad' : 'good')
     ]));
+    if (d.role === 'Owner') {
+      host.appendChild(el('div', { class: 'hud-tools' }, [
+        el('button', { type: 'button', id: 'drop-csv-pdf', class: 'btn hud-drop', text: '+ Drop CSV / PDF', onclick: openDropDrawer })
+      ]));
+    }
   }
 
   function viewTabs() {
@@ -448,6 +453,139 @@
     btnSnooze.addEventListener('click', function () { setStatus('SNOOZED', 'Snoozed'); });
     btnDismiss.addEventListener('click', function () { if (window.confirm('Dismiss this item?')) setStatus('DISMISSED', 'Dismissed'); });
     return node;
+  }
+
+  // ---------- V3.3 Owner-only "+ Drop CSV / PDF" drawer ----------
+  var dropDrawer = null;
+  function closeDropDrawer() {
+    if (dropDrawer && dropDrawer.parentNode) dropDrawer.parentNode.removeChild(dropDrawer);
+    dropDrawer = null;
+  }
+  function summaryPdfRequest(d, q) {
+    var fin = (d && d.financials) || {};
+    var pipe = (d && d.pipeline) || {};
+    var holdsN = (((d && d.exceptions) && d.exceptions.length) || 0) + (((d && d.holds) && d.holds.length) || 0);
+    var p1n = (q && q.counts && q.counts.p1) || 0;
+    return {
+      action: 'GENERATE_PDF',
+      type: 'SUMMARY',
+      payload: {
+        title: 'Ops Summary',
+        summary: 'Command Center snapshot as of ' + ((d && d.asOf) || ''),
+        h1: 'Item', h2: 'Detail', h3: 'Value',
+        rows: [
+          { col1: 'P1 Urgent', col2: 'Priority Queue', col3: String(p1n) },
+          { col1: 'Written', col2: 'Pipeline', col3: String(pipe.written || 0) },
+          { col1: 'Installed', col2: 'Pipeline', col3: String(pipe.installed || 0) },
+          { col1: 'Cleared', col2: 'Pipeline', col3: String(pipe.cleared || 0) },
+          { col1: 'Net Spread (Cleared)', col2: 'Month to date', col3: usd(fin.netSpreadCleared) },
+          { col1: 'Exceptions & Holds', col2: 'Open', col3: String(holdsN) }
+        ]
+      }
+    };
+  }
+  function downloadBlob(name, blob) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.setAttribute('download', name);
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1500);
+  }
+  function downloadBase64(name, mime, b64) {
+    var bin = atob(b64);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    downloadBlob(name, new Blob([bytes], { type: mime || 'application/pdf' }));
+  }
+  function openDropDrawer() {
+    if (dropDrawer) closeDropDrawer();
+    var campaign = el('select');
+    ['FIDIUM', 'CAMPAIGN_2_PLACEHOLDER'].forEach(function (c) {
+      campaign.appendChild(el('option', { value: c, text: c }));
+    });
+    var fileIn = el('input', { type: 'file', accept: '.csv,text/csv,text/plain' });
+    var paste = el('textarea', { rows: '6', placeholder: 'Paste CSV here (header row + data)' });
+    var msg = el('p', { class: 'small muted', text: 'Imports append to Raw_Feed_Import only. Pay and rate columns are ignored.' });
+    var btnImport = el('button', { type: 'button', class: 'btn primary', text: 'Import CSV' });
+    var btnPdf = el('button', { type: 'button', class: 'btn line', text: 'Download summary PDF' });
+    var btnClose = el('button', { type: 'button', class: 'btn line', text: 'Close' });
+    var panel = el('div', { class: 'drawer', role: 'dialog', 'aria-label': 'Drop CSV / PDF' }, [
+      el('h3', { text: 'Drop CSV / PDF' }),
+      el('p', { class: 'muted small', text: 'Owner only. CSV is appended to the Raw_Feed_Import tab. The 1-tap PDF is an ops summary of the numbers already on this screen.' }),
+      field('Campaign', campaign),
+      field('Upload CSV', fileIn),
+      field('Or paste CSV', paste),
+      msg,
+      el('div', { class: 'actions drawer-actions' }, [btnImport, btnPdf, btnClose])
+    ]);
+    dropDrawer = el('div', { class: 'drawer-back' }, [panel]);
+    dropDrawer.addEventListener('click', function (ev) { if (ev.target === dropDrawer) closeDropDrawer(); });
+    document.body.appendChild(dropDrawer);
+    btnClose.addEventListener('click', closeDropDrawer);
+    fileIn.addEventListener('change', function () {
+      var f = fileIn.files && fileIn.files[0];
+      if (!f) return;
+      if (f.size > 800000) { msg.textContent = 'File is too large (800 KB max).'; msg.className = 'small bad'; return; }
+      var reader = new FileReader();
+      reader.onload = function () { paste.value = String(reader.result || ''); };
+      reader.readAsText(f);
+    });
+    btnImport.addEventListener('click', function () {
+      var text = (paste.value || '').trim();
+      if (!text) { msg.textContent = 'Paste or upload a CSV first.'; msg.className = 'small bad'; return; }
+      var payload = { action: 'IMPORT_RAW_FEED', campaignId: campaign.value, feedType: 'RAW_UPLOAD', csvText: text };
+      btnImport.disabled = true;
+      msg.textContent = 'Importing…'; msg.className = 'small muted';
+      var go = DEMO
+        ? Promise.resolve((function () {
+            var lines = text.split(/\r?\n/).filter(function (l) { return l.trim(); });
+            if (lines.length < 2) return { status: 400, error: 'CSV must contain headers and at least 1 data row.' };
+            return { status: 200, importedCount: lines.length - 1, campaign: campaign.value, demo: true, appended: lines.length - 1, updated: 0 };
+          })())
+        : apiPost(payload);
+      go.then(function (r) {
+        btnImport.disabled = false;
+        if (r.status === 200) {
+          var note = (r.demo ? 'Demo: would import ' : 'Imported ') + r.importedCount + ' row' + (r.importedCount === 1 ? '' : 's') + ' for ' + (r.campaign || campaign.value) + (r.updated ? (' (' + r.updated + ' updated)') : '') + '.';
+          msg.textContent = note; msg.className = 'small';
+          toast(note, 'good');
+        } else {
+          msg.textContent = 'Import failed (' + (r.error || r.status) + ').'; msg.className = 'small bad';
+        }
+      }).catch(function () {
+        btnImport.disabled = false;
+        msg.textContent = 'Connection problem. Nothing was imported.'; msg.className = 'small bad';
+      });
+    });
+    btnPdf.addEventListener('click', function () {
+      var req = summaryPdfRequest(lastDash, lastQueue);
+      btnPdf.disabled = true;
+      msg.textContent = 'Building PDF…'; msg.className = 'small muted';
+      if (DEMO) {
+        var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Doorway Ops Summary (Demo)</title></head><body><h1>Doorway Partners — Ops Summary (Demo)</h1><p>Fake demo numbers. Not saved to Drive.</p></body></html>';
+        downloadBlob('Doorway_SUMMARY_demo.html', new Blob([html], { type: 'text/html' }));
+        msg.textContent = 'Demo: downloaded an HTML summary (no Drive upload).'; msg.className = 'small';
+        toast(msg.textContent, 'good');
+        btnPdf.disabled = false;
+        return;
+      }
+      apiPost(req).then(function (r) {
+        btnPdf.disabled = false;
+        if (r.status === 200 && r.base64) {
+          downloadBase64(r.title || 'Doorway_SUMMARY.pdf', r.mimeType || 'application/pdf', r.base64);
+          msg.textContent = 'Downloaded ' + (r.title || 'PDF') + '. It was not saved to Drive.'; msg.className = 'small';
+          toast(msg.textContent, 'good');
+        } else {
+          msg.textContent = 'PDF failed (' + (r.error || r.status) + ').'; msg.className = 'small bad';
+        }
+      }).catch(function () {
+        btnPdf.disabled = false;
+        msg.textContent = 'Connection problem. No PDF was generated.'; msg.className = 'small bad';
+      });
+    });
   }
 
   function render(d) {

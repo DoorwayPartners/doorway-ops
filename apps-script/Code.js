@@ -11,8 +11,10 @@
  *   5. DoorwayCore.buildPayload returns ONLY the fields that role may see.
  *
  * The dashboard read path never writes. Writes are the V2 Owner-only queue
- * actions in Queue.js and the Owner-only PATCH_CAMPAIGN_RULES / Learning_Log
- * path in Rules.js. Campaign rates are never added to the boot payload.
+ * actions in Queue.js, the Owner-only PATCH_CAMPAIGN_RULES / Learning_Log
+ * path in Rules.js, and the Owner-only GENERATE_PDF / IMPORT_RAW_FEED
+ * actions (PdfEngine.js, FeedImporter.js). Campaign rates are never added to the boot payload.
+ * GENERATE_PDF does not write to Drive.
  *
  * Script Properties (Project Settings > Script properties) — no IDs in code:
  *   OAUTH_CLIENT_ID     e.g. 1234-abc.apps.googleusercontent.com
@@ -59,11 +61,14 @@ function handle_(idToken, req) {
     var user = DoorwayCore.findUser(raw.users, check.email);
     if (!user) return json_({ status: 403, error: 'forbidden', message: 'This Google account is not on the Doorway Ops access list.' });
 
-    // V2 Owner Priority Queue actions and V3.2 PATCH_CAMPAIGN_RULES (POST only).
-    // Owner role is re-checked in the action handlers. GET_QUEUE always reads the sheet
-    // (fresh manual refresh). It does not use the boot cache.
+    // V2 Owner Priority Queue actions, V3.2 PATCH_CAMPAIGN_RULES, and V3.3
+    // GENERATE_PDF / IMPORT_RAW_FEED (POST only). Owner role is re-checked in
+    // the action handlers. GET_QUEUE always reads the sheet (fresh manual
+    // refresh). It does not use the boot cache.
     var action = req && req.action ? String(req.action) : '';
     if (action === 'PATCH_CAMPAIGN_RULES') return json_(handleCampaignPatch_(user, req, props));
+    if (action === 'GENERATE_PDF') return json_(handleGeneratePdf_(user, req));
+    if (action === 'IMPORT_RAW_FEED') return json_(handleImportRawFeed_(user, req, props));
     if (action) return json_(handleQueueAction_(action, user, req, props));
 
     var today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');

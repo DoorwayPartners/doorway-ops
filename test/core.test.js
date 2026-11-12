@@ -163,7 +163,7 @@ test('Site copy of core is identical to the Apps Script core (run npm run build)
 });
 
 test('No secrets or real sheet IDs in tracked source', () => {
-  const files = ['apps-script/Code.js', 'apps-script/Core.js', 'apps-script/Queue.js', 'apps-script/BootCache.js', 'docs/demo-data.js', 'docs/app.js', 'docs/config.js', 'docs/index.html'];
+  const files = ['apps-script/Code.js', 'apps-script/Core.js', 'apps-script/Queue.js', 'apps-script/BootCache.js', 'apps-script/PdfEngine.js', 'apps-script/FeedImporter.js', 'apps-script/EntityLinker.js', 'docs/demo-data.js', 'docs/app.js', 'docs/config.js', 'docs/index.html'];
   for (const f of files) {
     // The public web-app URL (deployment ID) is allowed; nothing else that looks like a Drive/Sheet ID is.
     const t = fs.readFileSync(path.join(__dirname, '..', f), 'utf8')

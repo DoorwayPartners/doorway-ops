@@ -173,6 +173,25 @@ function urgentIntakeSweep() {
     var label = GmailApp.getUserLabelByName(INTAKE_LABEL) || GmailApp.createLabel(INTAKE_LABEL);
     var today = Utilities.formatDate(new Date(), TZ, 'yyyyMMdd');
     var added = 0;
+    var orders = null;
+    var roster = null;
+    function loadLinkData_() {
+      if (orders) return;
+      orders = []; roster = [];
+      try {
+        var payroll = props.getProperty('PAYROLL_SHEET_ID');
+        if (!payroll) return;
+        orders = readTab_(payroll, TABS.orders).map(function (o) {
+          return { Order_ID: o.Order_ID, Service_Address: o.Service_Address, C2C_Status: o.C2C_Status, Rep_Name: o.Rep_Name };
+        });
+        roster = readTab_(payroll, TABS.users).map(function (u) {
+          return { Rep_Name: u.Name || u.Rep_Name };
+        });
+      } catch (err) {
+        console.error('entity linker load failed: ' + (err && err.message));
+        orders = []; roster = [];
+      }
+    }
     threads.forEach(function (t) {
       var tid = t.getId();
       if (!DoorwayCore.hasSourceThread(q.rows, tid)) {
@@ -180,7 +199,11 @@ function urgentIntakeSweep() {
         var last = msgs[msgs.length - 1];
         var subject = t.getFirstMessageSubject() || '(no subject)';
         var isApp = /new rep application/i.test(subject);
-        var snippet = String(last.getPlainBody() || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+        var bodyText = String(last.getPlainBody() || '').replace(/\s+/g, ' ').trim();
+        var snippet = bodyText.slice(0, 220);
+        loadLinkData_();
+        var link = enrichEntityContext(subject + '\n' + bodyText.slice(0, 4000), orders, roster);
+        var tag = (link && link.summaryTag) ? '[' + link.summaryTag + '] ' : '';
         var row = {
           Queue_ID: DoorwayCore.nextQueueId(q.rows, today),
           Created_At: isoNow_(),
@@ -188,13 +211,24 @@ function urgentIntakeSweep() {
           Category: isApp ? 'Recruit_App' : 'Escalation',
           Source_Thread_ID: tid,
           Rep_Or_Sender: last.getFrom(),
-          Context_Summary: 'New ' + (isApp ? 'rep application' : 'help@ intake') + ': "' + subject + '". ' + snippet + ' (No draft yet; Brooklynn\'s sweep writes it.)',
+          Context_Summary: tag + 'New ' + (isApp ? 'rep application' : 'help@ intake') + ': "' + subject + '". ' + snippet + ' (No draft yet; Brooklynn\'s sweep writes it.)',
           Draft_To: '', Draft_Cc: '', Draft_Subject: '', Draft_Body: '',
           Status: 'PENDING', Resolved_At: ''
         };
         q.sheet.appendRow(DoorwayCore.QUEUE_COLUMNS.map(function (k) { return safeCell_(row[k]); }));
         q.rows.push(row);
         added++;
+        if (link && link.summaryTag === 'Unlinked Intake') {
+          logLearningSafe_(props, DoorwayCore.buildLearningLogRow({
+            timestamp: row.Created_At,
+            sourceModule: 'ENTITY_LINK',
+            entityId: tid,
+            beforeValue: '',
+            afterValue: String(subject || '').slice(0, 180),
+            patternTag: 'UNLINKED_INTAKE',
+            appliedToRules: false
+          }));
+        }
       }
       t.addLabel(label);
     });

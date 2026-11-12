@@ -87,3 +87,15 @@ p.bad{color:var(--bad)}
   main{padding:16px}
   .dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 }
+
+/* V3.3 Owner "+ Drop CSV / PDF" drawer */
+.hud-tools{display:flex;justify-content:flex-end;padding:0 12px 8px;background:#0f172a}
+.btn.hud-drop{background:#1e293b;color:#e2e8f0;border:1px solid #334155;padding:6px 10px;font-size:12.5px;border-radius:8px}
+.drawer-back{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:30;display:flex;align-items:flex-end;justify-content:center}
+.drawer{background:#fff;width:100%;max-width:520px;border-radius:16px 16px 0 0;padding:16px;max-height:86vh;overflow:auto}
+.drawer-actions{grid-template-columns:1fr 1fr;margin-top:10px}
+.drawer-actions .btn.primary{grid-column:1/-1}
+@media (min-width:768px){
+  .drawer-back{align-items:center;padding:24px}
+  .drawer{border-radius:16px}
+}
