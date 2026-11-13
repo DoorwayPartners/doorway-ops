@@ -10,11 +10,17 @@
 var DoorwayFeed = (function () {
   var HEADER_ALIASES = {
     order_id: ['order id', 'order_id', 'order #', 'confirmation', 'c2c order'],
-    rep_name: ['rep', 'rep name', 'rep_name', 'sr assigned to', 'agent', 'sales rep'],
-    address: ['address', 'service address', 'service_address', 'street'],
+    rep_name: ['rep', 'rep name', 'rep_name', 'sr assigned to', 'agent', 'sales rep', 'assigned to', 'assigned to (email)', 'assigned_to'],
+    address: ['address', 'service address', 'service_address', 'street', 'portal_address', 'portal address'],
     city: ['city', 'town', 'market'],
     status: ['status', 'c2c status', 'c2c_status', 'sr status', 'disposition'],
-    campaign: ['campaign', 'carrier', 'provider']
+    campaign: ['campaign', 'carrier', 'provider'],
+    date_updated: ['date updated', 'date_updated', 'sr status date (date updated, et)', 'date updated, et', 'pin date'],
+    portal_address: ['portal_address', 'portal address'],
+    fiber_serving_location: ['fiber_serving_location', 'fiber serving location', 'fsl'],
+    data_broadband_fttp: ['data_broadband_fttp', 'data broadband fttp', 'broadband fttp'],
+    wire_center: ['wire_center', 'wire center', 'wirecentre'],
+    turf_class: ['turf type', 'turf_type', 'turf class', 'turf_class', 'rework flag']
   };
   var FEED_COLUMNS = [
     'Imported_At', 'Campaign_ID', 'Feed_Type', 'Order_ID', 'Rep_Name',
@@ -29,7 +35,7 @@ var DoorwayFeed = (function () {
     status: 'Status',
     campaign: 'Campaign_ID'
   };
-  var FEED_TYPES = ['RAW_UPLOAD', 'CARRIER_EXPORT', 'SALESRABBIT', 'TURF'];
+  var FEED_TYPES = ['RAW_UPLOAD', 'CARRIER_EXPORT', 'SALESRABBIT', 'SALESRABBIT_TURF', 'TURF', 'C2C_DAILY_SALES', 'CARRIER_LEAD', 'AUTO'];
   var MAX_ROWS = 2000;
   var MAX_CSV_CHARS = 800000;
   var MAX_CELL = 500;
@@ -102,7 +108,215 @@ var DoorwayFeed = (function () {
    * header mismatches / dropped pay columns for Learning_Log.
    * existingRows are objects with FEED_COLUMNS plus optional _row.
    */
-  function planImport(check, existingRows, nowIso, batchId) {
+  var UNWORKED_STATUS = ['', 'not attempted', 'new', 'unworked', 'no knock', 'not knocked', 'open'];
+  var SOLD_STATUS = ['sold', 'fiber slap', 'fiber slap!', 'closed', 'installed', 'sale', 'written', 'order submitted', 'completed'];
+
+  function headerSet(headers) {
+    var s = {};
+    (headers || []).forEach(function (h) { s[normalizeHeader(h)] = true; });
+    return s;
+  }
+
+  function detectFeedType(rawHeaders) {
+    var set = headerSet(rawHeaders);
+    var joined = (rawHeaders || []).map(function (h) { return String(h || '').toLowerCase(); }).join(' | ');
+    if (set.portal_address || set.fiber_serving_location || set.data_broadband_fttp ||
+        /fiber_serving|broadband_fttp|portal_address/.test(joined)) {
+      return 'CARRIER_LEAD';
+    }
+    if ((set.date_updated || /date updated/.test(joined)) && set.status && (set.address || set.portal_address) &&
+        (set.city || set.rep_name)) {
+      return 'SALESRABBIT_TURF';
+    }
+    if (set.order_id && (set.status || set.rep_name) && (set.sale_date || set.rep_name || /c2c/.test(joined))) {
+      return 'C2C_DAILY_SALES';
+    }
+    return 'RAW_UPLOAD';
+  }
+
+  function isUnworked(status) {
+    return UNWORKED_STATUS.indexOf(String(status || '').trim().toLowerCase()) >= 0;
+  }
+  function isSold(status) {
+    var s = String(status || '').trim().toLowerCase();
+    return SOLD_STATUS.indexOf(s) >= 0 || s.indexOf('fiber slap') === 0;
+  }
+  function classifyTurf(status, turfClassRaw) {
+    var flag = String(turfClassRaw || '').trim().toLowerCase();
+    if (/rework/.test(flag)) return 'REWORK_TURF';
+    if (/new/.test(flag)) return 'NEW_TURF';
+    return isUnworked(status) ? 'NEW_TURF' : 'REWORK_TURF';
+  }
+
+  function streetKey(addr) {
+    if (typeof DoorwayEntity !== 'undefined' && DoorwayEntity.normalizeStreet) {
+      return DoorwayEntity.normalizeStreet(addr);
+    }
+    return String(addr || '').toLowerCase().replace(/\bstreet\b/g, 'st').replace(/\broad\b/g, 'rd')
+      .replace(/\bavenue\b/g, 'ave').replace(/\bdrive\b/g, 'dr').replace(/[^a-z0-9]/g, '');
+  }
+  function streetKeys(addr) {
+    var full = String(addr || '');
+    var keys = [streetKey(full), streetKey(full.split(',')[0])];
+    var uniq = [];
+    keys.forEach(function (k) { if (k && k.length >= 8 && uniq.indexOf(k) < 0) uniq.push(k); });
+    return uniq;
+  }
+  function addStreetKeys(map, addr) {
+    streetKeys(addr).forEach(function (k) { map[k] = true; });
+  }
+  function hasStreetMatch(map, addr) {
+    return streetKeys(addr).some(function (k) { return !!map[k]; });
+  }
+
+  function isActiveCustomer(order) {
+    if (!order) return false;
+    var s = String(order.C2C_Status || order.Install_Status || order.Status || '').toLowerCase();
+    if (s.indexOf('cancel') !== -1 || s.indexOf('disconnect') !== -1) return false;
+    if (order.Cancel_Date) return false;
+    return s === 'installed' || s.indexOf('active') !== -1 || s.indexOf('completed') !== -1 ||
+      String(order.DATA_BROADBAND_FTTP || order.data_broadband_fttp || '').toUpperCase() === 'Y';
+  }
+
+  function analyzeFeed(check, records, existingRows, opts) {
+    opts = opts || {};
+    var detected = detectFeedType(check.rows[0] || []);
+    var effectiveType = check.feedType;
+    if (!effectiveType || effectiveType === 'RAW_UPLOAD' || effectiveType === 'AUTO') effectiveType = detected;
+    var turf = { NEW_TURF: 0, REWORK_TURF: 0 };
+    var knocked = 0, sold = 0, clean = 0, knockedClean = 0, soldClean = 0;
+    records.forEach(function (rec) {
+      var klass = classifyTurf(rec.Status, rec._turfClass);
+      rec.Turf_Class = klass;
+      turf[klass] = (turf[klass] || 0) + 1;
+      var unworked = isUnworked(rec.Status);
+      var soldRow = isSold(rec.Status);
+      if (!unworked) knocked++;
+      if (soldRow) sold++;
+      clean++;
+      if (!unworked) knockedClean++;
+      if (soldRow) soldClean++;
+    });
+    var contactRate = records.length ? knocked / records.length : 0;
+    var conversionRate = clean ? soldClean / clean : 0;
+    var knockedShare = clean ? knockedClean / clean : 0;
+    var reRouteAlert = { flagged: false, knockedShare: Math.round(knockedShare * 1000) / 10, conversionRate: Math.round(conversionRate * 1000) / 10, expectedUptakePct: null };
+    if (opts.expectedUptakePct == null || opts.expectedUptakePct === '') {
+      reRouteAlert.reason = 'expected_uptake_not_set';
+    } else {
+      var expected = Number(opts.expectedUptakePct);
+      reRouteAlert.expectedUptakePct = expected;
+      if (isFinite(expected) && knockedShare >= 0.25 && conversionRate < (expected / 100) * 0.5) {
+        reRouteAlert.flagged = true;
+        reRouteAlert.reason = 're_route_review';
+      } else {
+        reRouteAlert.reason = 'within_pace';
+      }
+    }
+
+    var existing = (existingRows || []).concat(records);
+    var c2cBatchesSince = function (pinDate) {
+      var pin = String(pinDate || '').slice(0, 10);
+      var batches = {};
+      existing.forEach(function (r) {
+        var ft = String(r.Feed_Type || '').toUpperCase();
+        if (ft !== 'C2C_DAILY_SALES' && ft !== 'CARRIER_EXPORT' && check.feedType !== 'C2C_DAILY_SALES' && !/c2c/.test(ft.toLowerCase())) {
+          // still count rows we just classified as C2C
+        }
+        var isC2c = ft === 'C2C_DAILY_SALES' || ft === 'CARRIER_EXPORT' || (r._detectedType === 'C2C_DAILY_SALES');
+        if (!isC2c && effectiveType === 'C2C_DAILY_SALES' && r.Import_Batch === (opts.batchId || r.Import_Batch) && r.Order_ID) isC2c = true;
+        if (!isC2c) return;
+        var d = String(r.Date_Updated || r.Imported_At || '').slice(0, 10);
+        if (pin && d && d >= pin) batches[r.Import_Batch || d] = true;
+      });
+      return Object.keys(batches).length;
+    };
+    var c2cAddresses = {};
+    existing.forEach(function (r) {
+      var ft = String(r.Feed_Type || '').toUpperCase();
+      if (ft === 'C2C_DAILY_SALES' || ft === 'CARRIER_EXPORT' || r._detectedType === 'C2C_DAILY_SALES' || r.Order_ID) {
+        streetKeys(r.Address).forEach(function (k) { c2cAddresses[k] = r; });
+      }
+    });
+    var missingOrders = [];
+    if (effectiveType === 'SALESRABBIT_TURF' || effectiveType === 'SALESRABBIT' || effectiveType === 'TURF') {
+      records.forEach(function (rec) {
+        if (!isSold(rec.Status) && !/fiber slap/.test(String(rec.Status || '').toLowerCase())) return;
+        var key = streetKey(rec.Address);
+        var reports = c2cBatchesSince(rec.Date_Updated || rec.Imported_At);
+        var matched = hasStreetMatch(c2cAddresses, rec.Address);
+        if (!matched && reports >= 2) {
+          missingOrders.push({
+            Address: rec.Address,
+            City: rec.City,
+            Rep_Name: rec.Rep_Name,
+            Status: rec.Status,
+            pinDate: rec.Date_Updated || rec.Imported_At || '',
+            reportsSincePin: reports
+          });
+        }
+      });
+    }
+    // When a C2C daily file arrives, also re-check previously imported SR pins.
+    if (effectiveType === 'C2C_DAILY_SALES') {
+      (existingRows || []).forEach(function (rec) {
+        var ft = String(rec.Feed_Type || '').toUpperCase();
+        if (ft !== 'SALESRABBIT_TURF' && ft !== 'SALESRABBIT' && ft !== 'TURF') return;
+        if (!isSold(rec.Status) && !/fiber slap/.test(String(rec.Status || '').toLowerCase())) return;
+        var key = streetKey(rec.Address);
+        var reports = c2cBatchesSince(rec.Date_Updated || rec.Imported_At);
+        var matched = hasStreetMatch(c2cAddresses, rec.Address);
+        if (!matched && reports >= 2) {
+          missingOrders.push({
+            Address: rec.Address,
+            City: rec.City,
+            Rep_Name: rec.Rep_Name,
+            Status: rec.Status,
+            pinDate: rec.Date_Updated || rec.Imported_At || '',
+            reportsSincePin: reports
+          });
+        }
+      });
+    }
+
+    var droppedActive = 0;
+    var cleanByTown = {};
+    var activeKeys = {};
+    (opts.orders || []).forEach(function (o) {
+      if (!isActiveCustomer(o)) return;
+      addStreetKeys(activeKeys, o.Service_Address || o.Address || o.PORTAL_ADDRESS);
+    });
+    if (effectiveType === 'CARRIER_LEAD' || effectiveType === 'CARRIER_EXPORT') {
+      records.forEach(function (rec) {
+        var existingFlag = String(rec._broadband || rec._existingCustomer || '').toUpperCase();
+        var active = existingFlag === 'Y' || existingFlag === 'TRUE' || hasStreetMatch(activeKeys, rec.Address);
+        rec.Vet_Status = active ? 'ACTIVE_CUSTOMER' : 'CLEAN';
+        if (active) droppedActive++;
+        else {
+          var town = rec.City || rec._wireCenter || 'Unknown';
+          cleanByTown[town] = (cleanByTown[town] || 0) + 1;
+        }
+      });
+    }
+
+    return {
+      detectedFeedType: detected,
+      effectiveFeedType: effectiveType,
+      turfBreakdown: turf,
+      contactRate: Math.round(contactRate * 1000) / 10,
+      conversionRate: Math.round(conversionRate * 1000) / 10,
+      reRouteAlert: reRouteAlert,
+      missingOrders: missingOrders,
+      carrierVetting: {
+        droppedActive: droppedActive,
+        cleanByTown: cleanByTown
+      }
+    };
+  }
+
+  function planImport(check, existingRows, nowIso, batchId, opts) {
+    opts = opts || {};
+    opts.batchId = batchId || opts.batchId;
     var headers = (check.rows[0] || []).map(normalizeHeader);
     var headerMismatches = [];
     var droppedHeaders = [];
@@ -158,6 +372,16 @@ var DoorwayFeed = (function () {
         }
         obj[col] = val;
       }
+      // Side-channel analysis fields (not written to Raw_Feed_Import).
+      for (var x = 0; x < headers.length; x++) {
+        var hCanon = headers[x];
+        var hv = clip(src[x], MAX_CELL);
+        if (hCanon === 'date_updated' && hv) obj.Date_Updated = hv;
+        if (hCanon === 'turf_class' && hv) obj._turfClass = hv;
+        if (hCanon === 'wire_center' && hv) obj._wireCenter = hv;
+        if (hCanon === 'data_broadband_fttp' && hv) obj._broadband = hv;
+        if (hCanon === 'fiber_serving_location' && hv) obj._fsl = hv;
+      }
       var town = obj.City || 'Unknown';
       townCounts[town] = (townCounts[town] || 0) + 1;
       records.push(obj);
@@ -182,10 +406,22 @@ var DoorwayFeed = (function () {
       }
     }
 
+    var analysis = analyzeFeed(check, records, existingRows, opts);
+    records.forEach(function (rec) { rec._detectedType = analysis.effectiveFeedType; });
+
+    // Strip side-channel fields from rows that will be written.
+    function writable(row) {
+      var out = {};
+      FEED_COLUMNS.forEach(function (k) { out[k] = row[k] == null ? '' : row[k]; });
+      return out;
+    }
+
     return {
       status: 200,
       campaign: check.campaignId,
-      feedType: check.feedType,
+      feedType: analysis.effectiveFeedType,
+      requestedFeedType: check.feedType,
+      detectedFeedType: analysis.detectedFeedType,
       batchId: batchId || '',
       importedCount: records.length,
       appended: append.length,
@@ -193,9 +429,15 @@ var DoorwayFeed = (function () {
       townBreakdown: townCounts,
       headerMismatches: headerMismatches,
       droppedHeaders: droppedHeaders,
-      append: append,
+      append: append.map(writable),
       updates: updates,
-      sample: records.slice(0, 5)
+      sample: records.slice(0, 5).map(writable),
+      turfBreakdown: analysis.turfBreakdown,
+      contactRate: analysis.contactRate,
+      conversionRate: analysis.conversionRate,
+      reRouteAlert: analysis.reRouteAlert,
+      missingOrders: analysis.missingOrders,
+      carrierVetting: analysis.carrierVetting
     };
   }
 
@@ -209,7 +451,9 @@ var DoorwayFeed = (function () {
     normalizeHeader: normalizeHeader,
     parseCsv: parseCsv,
     checkImport: checkImport,
-    planImport: planImport
+    planImport: planImport,
+    detectFeedType: detectFeedType,
+    classifyTurf: classifyTurf
   };
 })();
 
@@ -270,7 +514,9 @@ function handleImportRawFeed_(user, req, props) {
     var tab = ensureFeedTab_(payroll);
     var now = isoNow_();
     var batchId = 'IMP-' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss');
-    var plan = DoorwayFeed.planImport(check, tab.rows, now, batchId);
+    var existingOrders = [];
+    try { existingOrders = readTab_(payroll, TABS.orders) || []; } catch (err) { existingOrders = []; }
+    var plan = DoorwayFeed.planImport(check, tab.rows, now, batchId, { orders: existingOrders });
     plan.append.forEach(function (row) {
       tab.sheet.appendRow(DoorwayFeed.FEED_COLUMNS.map(function (k) { return safeCell_(row[k]); }));
     });
@@ -296,9 +542,17 @@ function handleImportRawFeed_(user, req, props) {
       appended: plan.appended,
       updated: plan.updated,
       campaign: plan.campaign,
+      feedType: plan.feedType,
+      detectedFeedType: plan.detectedFeedType,
       townBreakdown: plan.townBreakdown,
       sample: plan.sample,
-      batchId: batchId
+      batchId: batchId,
+      turfBreakdown: plan.turfBreakdown,
+      contactRate: plan.contactRate,
+      conversionRate: plan.conversionRate,
+      reRouteAlert: plan.reRouteAlert,
+      missingOrders: plan.missingOrders,
+      carrierVetting: plan.carrierVetting
     };
   } finally {
     lock.releaseLock();

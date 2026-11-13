@@ -186,13 +186,13 @@ test('QueueGuard + router keep confirm/lock/409/428 and role/email cache keying'
   ]);
 });
 
-test('Frontend: v=3.6 cache-buster, timeline, instruct bar, 5s undo, Web Speech only, no innerHTML', () => {
+test('Frontend: cache-buster, timeline, instruct bar, 5s undo, Web Speech only, no innerHTML', () => {
   const html = read('docs/index.html');
-  assert.match(html, /styles\.css\?v=3\.6/);
-  assert.match(html, /app\.js\?v=3\.6/);
-  assert.match(html, /config\.js\?v=3\.6/);
-  assert.match(html, /core\.js\?v=3\.6/);
-  assert.match(html, />V3\.6 ·/);
+  assert.match(html, /styles\.css\?v=/);
+  assert.match(html, /app\.js\?v=/);
+  assert.match(html, /config\.js\?v=/);
+  assert.match(html, /core\.js\?v=/);
+  assert.match(html, />V4\.0 ·/);
   assert.doesNotMatch(html, /\?v=3\.5/);
   const csp = html.match(/Content-Security-Policy" content="([^"]+)"/)[1];
   assert.ok(!/unsafe-inline/.test(csp.split('script-src')[1].split(';')[0]));

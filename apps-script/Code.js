@@ -13,7 +13,10 @@
  * The dashboard read path never writes. Writes are the V2 Owner-only queue
  * actions in Queue.js, the Owner-only PATCH_CAMPAIGN_RULES / Learning_Log
  * path in Rules.js, and the Owner-only GENERATE_PDF / IMPORT_RAW_FEED
- * actions (PdfEngine.js, FeedImporter.js). Campaign rates are never added to the boot payload.
+ * actions (PdfEngine.js, FeedImporter.js). V4.0 adds Owner-only
+ * EVALUATE_PAYROLL (read-only; never writes Payroll_Ledger) and
+ * STAGE_GROUPME_DIGEST (read-only GroupMe ingest; never posts).
+ * Campaign rates are never added to the boot payload.
  * GENERATE_PDF does not write to Drive.
  *
  * Script Properties (Project Settings > Script properties) — no IDs in code:
@@ -70,6 +73,8 @@ function handle_(idToken, req) {
     if (action === 'PATCH_CAMPAIGN_RULES') return json_(handleCampaignPatch_(user, req, props));
     if (action === 'GENERATE_PDF') return json_(handleGeneratePdf_(user, req));
     if (action === 'IMPORT_RAW_FEED') return json_(handleImportRawFeed_(user, req, props));
+    if (action === 'EVALUATE_PAYROLL') return json_(handleEvaluatePayroll_(user, req, props));
+    if (action === 'STAGE_GROUPME_DIGEST') return json_(handleStageGroupMeDigest_(user, req, props));
     if (action === 'SAFE_APPROVE_SEND' || action === 'INSTRUCT_DRAFT' ||
         action === 'APPROVE_AND_SEND' || action === 'UPDATE_QUEUE_STATUS' || action === 'GET_QUEUE') {
       return json_(handleQueueAction_(action, user, req, props));

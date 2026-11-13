@@ -76,13 +76,22 @@
     ]);
   }
   function leaderboardCard(title, rows, rules) {
+    var daily = (rules && rules.dealsPerDay) || 2;
+    var trailingCount = (rows || []).filter(function (r) { return r.trailingPace; }).length;
     return card(title, [
-      el('p', { class: 'muted small', text: 'Pace target: ' + rules.dealsPerDay + ' deals/day (Mon–Sat) month to date' }),
+      el('p', { class: 'muted small', text: 'North star: ' + daily + ' deals/day, 10/week. MTD uses Mon–Sat working days.' }),
+      trailingCount ? el('p', { class: 'muted small', text: trailingCount + ' rep' + (trailingCount === 1 ? '' : 's') + ' trailing weekly pace — flagged for field shadowing.' }) : null,
       collapseList(rows, function (r) {
+        var trail = !!r.trailingPace;
+        var weekBit = 'this week ' + (r.dealsWeek != null ? r.dealsWeek : '—') + '/' + (r.weeklyTarget || 10) +
+          ' · today ' + (r.dealsToday != null ? r.dealsToday : '—') + '/' + (r.dailyTarget || daily);
         return [el('div', { class: 'li-main' }, [
-          el('div', { class: 'row-between' }, [el('span', { text: r.rep }), el('span', { class: 'small', text: r.deals + ' / ' + r.target })]),
-          bar(r.pacePct),
-          el('div', { class: 'muted small', text: r.installs + ' installed · ' + r.pending + ' pending' + (r.greenLight === false ? ' · compliance hold' : '') })
+          el('div', { class: 'row-between' }, [
+            el('span', { text: r.rep }),
+            trail ? el('span', { class: 'pill bad', text: 'Trailing — shadow' }) : el('span', { class: 'pill good', text: 'On pace' })
+          ]),
+          bar(r.weekPacePct != null ? r.weekPacePct : r.pacePct, trail ? 'bad' : 'good'),
+          el('div', { class: 'muted small', text: weekBit + ' · MTD ' + r.deals + ' / ' + r.target + ' · ' + r.installs + ' installed · ' + r.pending + ' pending' + (r.greenLight === false ? ' · compliance hold' : '') })
         ])];
       }, 'No reps yet.')
     ]);

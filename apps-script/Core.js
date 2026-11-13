@@ -198,18 +198,63 @@ var DoorwayCore = (function () {
     return w;
   }
 
+  var WEEKLY_DEAL_TARGET = 10; // 2 deals/day × 5 weekdays
+
+  function startOfWeekMonday(today) {
+    var dow = today.getUTCDay();
+    var delta = dow === 0 ? -6 : 1 - dow;
+    return new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + delta));
+  }
+  function ymdUtc(d) {
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  }
+  function inWeekToDate(dateVal, today) {
+    var d = toDate(dateVal);
+    if (!d) return false;
+    var x = ymdUtc(d), start = ymdUtc(startOfWeekMonday(today)), end = ymdUtc(today);
+    return x >= start && x <= end;
+  }
+  function isSameYmd(dateVal, today) {
+    var d = toDate(dateVal);
+    return !!d && ymd(d) === ymd(today);
+  }
+  function weekdaysElapsedMonFri(today) {
+    var n = 0;
+    var start = startOfWeekMonday(today);
+    for (var t = ymdUtc(start); t <= ymdUtc(today); t += 86400000) {
+      var dow = new Date(t).getUTCDay();
+      if (dow >= 1 && dow <= 5) n++;
+    }
+    return n;
+  }
+
   function leaderboard(orders, names, today) {
     var target = DEALS_PER_DAY * workingDaysMTD(today);
+    var weekExpected = DEALS_PER_DAY * weekdaysElapsedMonFri(today);
     var by = {};
-    names.forEach(function (n) { by[norm(n)] = { rep: n, deals: 0, installs: 0, pending: 0 }; });
+    names.forEach(function (n) {
+      by[norm(n)] = { rep: n, deals: 0, installs: 0, pending: 0, dealsToday: 0, dealsWeek: 0 };
+    });
     orders.forEach(function (o) {
       var k = norm(o.Rep_Name);
-      if (!by[k] || isCancelled(o) || !inMonth(o.Sale_Date, today)) return;
+      if (!by[k] || isCancelled(o)) return;
+      if (inWeekToDate(o.Sale_Date, today)) by[k].dealsWeek++;
+      if (isSameYmd(o.Sale_Date, today)) by[k].dealsToday++;
+      if (!inMonth(o.Sale_Date, today)) return;
       by[k].deals++;
       if (isInstalled(o)) by[k].installs++; else by[k].pending++;
     });
     return Object.keys(by).map(function (k) {
-      var r = by[k]; r.target = target; r.pacePct = target ? Math.round(100 * r.deals / target) : 0; return r;
+      var r = by[k];
+      r.target = target;
+      r.pacePct = target ? Math.round(100 * r.deals / target) : 0;
+      r.dailyTarget = DEALS_PER_DAY;
+      r.weeklyTarget = WEEKLY_DEAL_TARGET;
+      r.weekExpected = weekExpected;
+      r.weekPacePct = weekExpected ? Math.round(100 * r.dealsWeek / weekExpected) : 0;
+      r.trailingPace = r.dealsWeek < weekExpected;
+      r.shadowFlag = r.trailingPace ? 'Field shadowing' : '';
+      return r;
     }).sort(function (a, b) { return b.deals - a.deals || a.rep.localeCompare(b.rep); });
   }
 

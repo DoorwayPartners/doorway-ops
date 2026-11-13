@@ -10,3 +10,5 @@
 !FeedImporter.js
 !EntityLinker.js
 !QueueGuard.js
+!PayrollEngine.js
+!GroupMeBridge.js
