@@ -843,18 +843,23 @@
     if (VIEW_TO_TAB[targetId]) view = VIEW_TO_TAB[targetId];
   }
   function gateNav(role) {
-    document.querySelectorAll('#bottom-nav .nav-item').forEach(function (item) {
+    document.querySelectorAll('#sidebar .nav-item[data-target]').forEach(function (item) {
       var target = item.getAttribute('data-target');
       if (canSeeView(role, target)) item.classList.remove('hidden');
       else item.classList.add('hidden');
+    });
+    var financeVisible = canSeeView(role, 'view-ledger') || canSeeView(role, 'view-config');
+    document.querySelectorAll('#sidebar [data-nav-group="finance"]').forEach(function (h) {
+      if (financeVisible) h.classList.remove('hidden');
+      else h.classList.add('hidden');
     });
   }
   function showAppShell(d) {
     var signin = document.getElementById('signin');
     if (signin) signin.classList.remove('active');
-    var nav = document.getElementById('bottom-nav');
+    var menuBtn = document.getElementById('menu-btn');
     var chips = document.getElementById('campaign-filter');
-    if (nav) nav.classList.remove('hidden');
+    if (menuBtn) menuBtn.classList.remove('hidden');
     if (chips) chips.classList.remove('hidden');
     gateNav(d && d.role);
     var current = document.querySelector('.view-container.active');
@@ -866,9 +871,10 @@
     }
   }
   function hideAppShell() {
-    var nav = document.getElementById('bottom-nav');
+    closeSidebar();
+    var menuBtn = document.getElementById('menu-btn');
     var chips = document.getElementById('campaign-filter');
-    if (nav) nav.classList.add('hidden');
+    if (menuBtn) menuBtn.classList.add('hidden');
     if (chips) chips.classList.add('hidden');
     document.querySelectorAll('.view-container').forEach(function (v) { v.classList.remove('active'); });
     var signin = document.getElementById('signin');
@@ -1043,12 +1049,38 @@
     document.head.appendChild(s);
   }
 
-  // V5 Mobile OS Router
-  document.querySelectorAll('.nav-item').forEach(function (item) {
+  // V8 Sidebar Router Logic
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('sidebar-overlay');
+  var menuBtn = document.getElementById('menu-btn');
+  var closeBtn = document.getElementById('close-menu-btn');
+
+  function setSidebarOpen(open) {
+    if (!sidebar || !overlay) return;
+    sidebar.classList.toggle('open', !!open);
+    overlay.classList.toggle('open', !!open);
+    sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (menuBtn) {
+      menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      menuBtn.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    }
+  }
+  function closeSidebar() { setSidebarOpen(false); }
+  function toggleSidebar() { setSidebarOpen(!(sidebar && sidebar.classList.contains('open'))); }
+
+  if (menuBtn) menuBtn.addEventListener('click', toggleSidebar);
+  if (closeBtn) closeBtn.addEventListener('click', closeSidebar);
+  if (overlay) overlay.addEventListener('click', closeSidebar);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && sidebar && sidebar.classList.contains('open')) closeSidebar();
+  });
+
+  document.querySelectorAll('#sidebar .nav-item').forEach(function (item) {
     item.addEventListener('click', function (e) {
       e.preventDefault();
       if (item.classList.contains('hidden')) return;
       switchView(item.getAttribute('data-target'));
+      if (window.innerWidth < 820) closeSidebar();
     });
   });
   document.querySelectorAll('.chip').forEach(function (chip) {

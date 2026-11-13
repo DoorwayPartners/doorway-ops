@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" role="img" aria-label="Doorway Partners mark">
+  <rect width="48" height="48" rx="11" fill="#13294B"/>
+  <path d="M14 12H25C31.6274 12 37 17.3726 37 24C37 30.6274 31.6274 36 25 36H14V12Z" stroke="#FFFFFF" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="M14 20H24.5C26.7091 20 28.5 21.7909 28.5 24C28.5 26.2091 26.7091 28 24.5 28H14" stroke="#38BDF8" stroke-width="3.2" stroke-linecap="round"/>
+  <circle cx="24" cy="24" r="2.2" fill="#38BDF8"/>
+</svg>

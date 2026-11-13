@@ -6,19 +6,26 @@
   <meta name="robots" content="noindex, nofollow">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' https://accounts.google.com/gsi/style; frame-src https://accounts.google.com/gsi/; connect-src 'self' https://accounts.google.com/gsi/ https://script.google.com https://script.googleusercontent.com; img-src 'self' data: https://*.googleusercontent.com; base-uri 'none'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
-  <meta name="theme-color" content="#0f172a">
+  <meta name="theme-color" content="#0B192C">
   <title>Doorway Ops</title>
+  <link rel="icon" href="mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css?v=1febb70">
 </head>
 <body>
   <div id="app" class="shell">
     <div class="sticky-stack">
       <header class="topbar">
-        <div>
-          <h1>Doorway Ops</h1>
-          <p id="whoami" class="muted small">Command Center</p>
+        <div class="topbar-left">
+          <button type="button" id="menu-btn" class="hamburger hidden" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">☰</button>
+          <div class="brand">
+            <img class="brand-mark" src="mark.svg" alt="Doorway Partners" width="28" height="28">
+            <div>
+              <h1>Doorway Ops</h1>
+              <p id="whoami" class="muted small">Command Center</p>
+            </div>
+          </div>
         </div>
-        <button id="signout" class="btn ghost hidden" type="button">Sign out</button>
+        <button id="signout" class="btn ghost topbar-signout hidden" type="button">Sign out</button>
       </header>
       <div id="hud-host"></div>
       <div id="demo-banner" class="demo-banner hidden"></div>
@@ -30,6 +37,25 @@
         <button type="button" class="chip" data-campaign="MOUNTAIN_HIGH">Mountain High</button>
       </div>
     </div>
+    <div id="sidebar-overlay" class="sidebar-overlay"></div>
+    <aside id="sidebar" class="sidebar" aria-hidden="true">
+      <div class="sidebar-head">
+        <h2 class="sidebar-title">
+          <img class="sidebar-mark" src="mark.svg" alt="" width="24" height="24">
+          Doorway OS
+        </h2>
+        <button type="button" id="close-menu-btn" class="sidebar-close" aria-label="Close menu">×</button>
+      </div>
+      <ul class="sidebar-nav">
+        <li><button type="button" class="nav-item active" data-target="view-inbox"><span>📥</span> Action Queue</button></li>
+        <li class="nav-header">Operations</li>
+        <li><button type="button" class="nav-item" data-target="view-turf"><span>🗺️</span> Field &amp; Turf</button></li>
+        <li><button type="button" class="nav-item" data-target="view-team"><span>👥</span> Roster &amp; Recruiting</button></li>
+        <li class="nav-header" data-nav-group="finance">Finance &amp; Admin</li>
+        <li><button type="button" class="nav-item" data-target="view-ledger"><span>💰</span> 1099 Ledger</button></li>
+        <li><button type="button" class="nav-item" data-target="view-config"><span>⚙️</span> System Config</button></li>
+      </ul>
+    </aside>
     <div id="owner-subtabs" class="hidden"></div>
     <main id="main" class="os-main">
       <section id="signin" class="card center view-container view-signin active">
@@ -65,13 +91,6 @@
         <p class="muted small">Travel ROI and Campaign Matrix settings will live here.</p>
       </div>
     </main>
-    <nav id="bottom-nav" class="bottom-nav hidden">
-      <button type="button" class="nav-item active" data-target="view-inbox"><span>📥</span>Inbox</button>
-      <button type="button" class="nav-item" data-target="view-turf"><span>🗺️</span>Turf</button>
-      <button type="button" class="nav-item" data-target="view-team"><span>👥</span>Team</button>
-      <button type="button" class="nav-item" data-target="view-ledger"><span>💰</span>Ledger</button>
-      <button type="button" class="nav-item" data-target="view-config"><span>⚙️</span>Config</button>
-    </nav>
     <footer class="foot muted small">V4.0 · Data from Doorway Partners sheets</footer>
   </div>
   <script src="config.js?v=4.0"></script>
