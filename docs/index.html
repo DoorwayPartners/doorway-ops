@@ -22,15 +22,56 @@
       </header>
       <div id="hud-host"></div>
       <div id="demo-banner" class="demo-banner hidden"></div>
+      <div id="campaign-filter" class="campaign-chips hidden">
+        <button type="button" class="chip active" data-campaign="ALL">All Campaigns</button>
+        <button type="button" class="chip" data-campaign="FIDIUM">Fidium</button>
+        <button type="button" class="chip" data-campaign="ATT">AT&amp;T Fiber</button>
+        <button type="button" class="chip" data-campaign="METRONET">Metronet</button>
+        <button type="button" class="chip" data-campaign="MOUNTAIN_HIGH">Mountain High</button>
+      </div>
     </div>
-    <main id="main">
-      <section id="signin" class="card center">
+    <div id="owner-subtabs" class="hidden"></div>
+    <main id="main" class="os-main">
+      <section id="signin" class="card center view-container view-signin active">
         <h2>Sign in</h2>
         <p class="muted">Use the Google account Doorway Partners added to the access list.</p>
         <div id="gsi-button"></div>
         <p id="signin-msg" class="muted small"></p>
+        <div id="auth-error" class="hidden"></div>
       </section>
+
+      <div id="view-inbox" class="view-container view-pad">
+        <div id="queue-feed"></div>
+      </div>
+
+      <div id="view-turf" class="view-container view-pad">
+        <h3>Field &amp; Turf Module</h3>
+        <p class="muted small">Territory re-route alerts will live here. SalesRabbit stays read-only.</p>
+        <div id="turf-feed"></div>
+      </div>
+
+      <div id="view-team" class="view-container view-pad">
+        <div id="team-pace-feed"></div>
+      </div>
+
+      <div id="view-ledger" class="view-container view-pad">
+        <h3>1099 Payroll &amp; Margin Ledger</h3>
+        <p class="muted small">Carrier clearing and 90-day clawback watchdogs will live here.</p>
+        <div id="ledger-feed"></div>
+      </div>
+
+      <div id="view-config" class="view-container view-pad">
+        <h3>System Config &amp; Logistics</h3>
+        <p class="muted small">Travel ROI and Campaign Matrix settings will live here.</p>
+      </div>
     </main>
+    <nav id="bottom-nav" class="bottom-nav hidden">
+      <button type="button" class="nav-item active" data-target="view-inbox"><span>📥</span>Inbox</button>
+      <button type="button" class="nav-item" data-target="view-turf"><span>🗺️</span>Turf</button>
+      <button type="button" class="nav-item" data-target="view-team"><span>👥</span>Team</button>
+      <button type="button" class="nav-item" data-target="view-ledger"><span>💰</span>Ledger</button>
+      <button type="button" class="nav-item" data-target="view-config"><span>⚙️</span>Config</button>
+    </nav>
     <footer class="foot muted small">V4.0 · Data from Doorway Partners sheets</footer>
   </div>
   <script src="config.js?v=4.0"></script>

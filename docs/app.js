@@ -446,7 +446,7 @@
 
   function viewTabs() {
     function b(label, v, labelId) {
-      var attrs = { type: 'button', class: 'vtab' + (view === v ? ' active' : ''), text: label, onclick: function () { view = v; render(lastDash); } };
+      var attrs = { type: 'button', class: 'vtab' + (view === v ? ' active' : ''), text: label, onclick: function () { view = v; switchView(VIEW_FOR[v] || 'view-inbox'); render(lastDash); } };
       var n = el('button', attrs);
       if (labelId) n.id = labelId;
       return n;
@@ -468,8 +468,10 @@
     ]);
   }
   function renderQueueView() {
+    var host = document.getElementById('queue-feed') || main;
     var box = el('div', { class: 'qwrap' }, [card('Loading queue…', [el('div', { class: 'skeleton' })])]);
-    main.appendChild(box);
+    host.textContent = '';
+    host.appendChild(box);
     function paint(q) {
       box.textContent = '';
       if (q.status !== 200) { box.appendChild(card('Queue unavailable', [el('p', { class: 'muted', text: 'Could not load the queue (' + (q.error || q.status) + ').' })])); return; }
@@ -809,28 +811,158 @@
     });
   }
 
+  // ---------- V5 Mobile OS shell (bottom nav, campaign chips, view router) ----------
+  var selectedCampaign = 'ALL';
+  var VIEW_FOR = { queue: 'view-inbox', field: 'view-turf', team: 'view-team', money: 'view-ledger', config: 'view-config' };
+  var VIEW_TO_TAB = { 'view-inbox': 'queue', 'view-turf': 'field', 'view-team': 'team', 'view-ledger': 'money', 'view-config': 'config' };
+
+  function canSeeView(role, viewId) {
+    if (viewId === 'view-ledger' || viewId === 'view-config') return role === 'Owner' || role === 'Admin';
+    return true;
+  }
+  function defaultViewId(role) {
+    if (role === 'Manager' || role === 'Admin') return 'view-team';
+    return 'view-inbox';
+  }
+  function fill(id, nodes) {
+    var host = document.getElementById(id);
+    if (!host) return;
+    host.textContent = '';
+    (nodes || []).forEach(function (n) { if (n) host.appendChild(n); });
+  }
+  function switchView(targetId) {
+    var role = lastDash && lastDash.role;
+    if (!targetId || !document.getElementById(targetId)) return;
+    if (role && !canSeeView(role, targetId)) return;
+    document.querySelectorAll('.nav-item').forEach(function (nav) {
+      nav.classList.toggle('active', nav.getAttribute('data-target') === targetId);
+    });
+    document.querySelectorAll('.view-container').forEach(function (v) {
+      v.classList.toggle('active', v.id === targetId);
+    });
+    if (VIEW_TO_TAB[targetId]) view = VIEW_TO_TAB[targetId];
+  }
+  function gateNav(role) {
+    document.querySelectorAll('#bottom-nav .nav-item').forEach(function (item) {
+      var target = item.getAttribute('data-target');
+      if (canSeeView(role, target)) item.classList.remove('hidden');
+      else item.classList.add('hidden');
+    });
+  }
+  function showAppShell(d) {
+    var signin = document.getElementById('signin');
+    if (signin) signin.classList.remove('active');
+    var nav = document.getElementById('bottom-nav');
+    var chips = document.getElementById('campaign-filter');
+    if (nav) nav.classList.remove('hidden');
+    if (chips) chips.classList.remove('hidden');
+    gateNav(d && d.role);
+    var current = document.querySelector('.view-container.active');
+    var currentId = current && current.id;
+    if (!currentId || currentId === 'signin' || (d && !canSeeView(d.role, currentId))) {
+      switchView(VIEW_FOR[view] && canSeeView(d.role, VIEW_FOR[view]) ? VIEW_FOR[view] : defaultViewId(d && d.role));
+    } else {
+      switchView(currentId);
+    }
+  }
+  function hideAppShell() {
+    var nav = document.getElementById('bottom-nav');
+    var chips = document.getElementById('campaign-filter');
+    if (nav) nav.classList.add('hidden');
+    if (chips) chips.classList.add('hidden');
+    document.querySelectorAll('.view-container').forEach(function (v) { v.classList.remove('active'); });
+    var signin = document.getElementById('signin');
+    if (signin) signin.classList.add('active');
+  }
+  function showLoading() {
+    var signin = document.getElementById('signin');
+    if (signin) signin.classList.remove('active');
+    fill('queue-feed', [card('Loading…', [el('div', { class: 'skeleton' })])]);
+    switchView('view-inbox');
+  }
+
   function render(d) {
     lastDash = d;
-    main.textContent = '';
+    showAppShell(d);
     document.getElementById('whoami').textContent = d.me.name + ' · ' + d.role + ' · as of ' + d.asOf;
     mountHud(d);
+    var authErr = document.getElementById('auth-error');
+    if (authErr) { authErr.textContent = ''; authErr.classList.add('hidden'); }
+    fill('queue-feed');
+    fill('team-pace-feed');
+    fill('turf-feed');
+    fill('ledger-feed');
     if (d.role === 'Owner') { // queue tab exists for the Owner role only; the API enforces it too
       applyBootQueue(d);
-      main.appendChild(viewTabs());
-      if (view === 'queue') return renderQueueView();
-      var ownerKids = view === 'team' ? renderTeam(d) : view === 'field' ? renderField(d) : renderMoney(d);
-      main.appendChild(dashGrid(ownerKids));
+      var tabHost = document.getElementById('owner-subtabs');
+      if (tabHost) { tabHost.textContent = ''; tabHost.appendChild(viewTabs()); }
+      renderQueueView();
+      fill('team-pace-feed', [dashGrid(renderTeam(d))]);
+      fill('turf-feed', renderField(d));
+      fill('ledger-feed', [dashGrid(renderMoney(d))]);
       if (view !== 'queue' && !lastQueue) loadQueue().catch(function () {});
+      switchView(VIEW_FOR[view] || 'view-inbox');
       return;
     }
-    var kids = d.role === 'Rep' ? renderRep(d) : d.role === 'Manager' ? renderManager(d) : renderExec(d);
-    if (d.role === 'Admin') main.appendChild(dashGrid(kids));
-    else kids.forEach(function (k) { main.appendChild(k); });
+    if (d.role === 'Admin') {
+      fill('queue-feed', [el('div', { class: 'note', text: 'The Priority Queue is Owner-only.' })]);
+      fill('team-pace-feed', [dashGrid(renderTeam(d))]);
+      fill('turf-feed', renderField(d));
+      fill('ledger-feed', [dashGrid(renderMoney(d))]);
+      switchView(VIEW_FOR[view] && canSeeView('Admin', VIEW_FOR[view]) ? VIEW_FOR[view] : defaultViewId('Admin'));
+      return;
+    }
+    if (d.role === 'Manager') {
+      fill('queue-feed', [walletCard(d.wallet, d.rules, 'My wallet')]);
+      fill('team-pace-feed', [leaderboardCard('Pod scoreboard', d.podScoreboard, d.rules)]);
+      fill('turf-feed', [day14Card(d.day14), missingCard(d.missingOrders, false), permitsCard(d.permits)]);
+      switchView(VIEW_FOR[view] && canSeeView('Manager', VIEW_FOR[view]) ? VIEW_FOR[view] : defaultViewId('Manager'));
+      return;
+    }
+    var c = d.compliance, t = d.tierProgress;
+    fill('queue-feed', [
+      walletCard(d.wallet, d.rules),
+      card('Compliance', [
+        el('div', { class: 'badge ' + (c.greenLight ? 'good' : 'bad'), text: c.greenLight ? 'GREEN LIGHT — payable' : 'ON HOLD — payouts paused' }),
+        c.greenLight ? null : el('p', { class: 'small', text: 'Still needed: ' + c.missing.join(', ') })
+      ]),
+      card('Tier progress', [
+        el('div', { class: 'row-between' }, [el('strong', { text: t.tier }), el('span', { class: 'small', text: t.verifiedInstalls + ' / ' + t.certifiedAt + ' verified installs' })]),
+        bar(100 * t.verifiedInstalls / t.certifiedAt, 'good'),
+        el('p', { class: 'muted small', text: t.toCertified ? t.toCertified + ' more to Certified Crew Rep · Pod Lead: ' + t.podLeadRule : 'Certified. Pod Lead: ' + t.podLeadRule }),
+        el('h4', { text: 'Pace this month' }),
+        el('div', { class: 'row-between small' }, [el('span', { text: d.pace.deals + ' deals' }), el('span', { text: 'target ' + d.pace.target })]),
+        bar(d.pace.pacePct)
+      ]),
+      card('My scorecard', [collapseList(d.scorecard, function (s) {
+        return line(s.Date + ' · graded by ' + s.Grader, 'Approach ' + s.Approach_Tonality + ' · Rebuttal ' + s.Rebuttal_Composure + ' · Pin/Dusk ' + s.Pin_Note_Dusk + ' · RepCard ' + s['RepCard_Send_Rate %'], s.Roleplay_Pass === 'Y' ? 'PASS' : 'RETRY', s.Roleplay_Pass === 'Y' ? 'good' : 'warn');
+      }, 'No scorecards yet.')])
+    ]);
+    fill('turf-feed', [
+      permitsCard(d.permits),
+      day14Card(d.day14),
+      d.missingOrders.length ? missingCard(d.missingOrders, true) : null
+    ]);
+    fill('team-pace-feed', [
+      card('My pace this month', [
+        el('div', { class: 'row-between small' }, [el('span', { text: d.pace.deals + ' deals' }), el('span', { text: 'target ' + d.pace.target })]),
+        bar(d.pace.pacePct)
+      ])
+    ]);
+    switchView(VIEW_FOR[view] && canSeeView('Rep', VIEW_FOR[view]) ? VIEW_FOR[view] : defaultViewId('Rep'));
   }
   function showError(title, msg) {
-    main.textContent = '';
     mountHud(null);
-    main.appendChild(card(title, [el('p', { class: 'muted', text: msg })], 'center'));
+    hideAppShell();
+    var authErr = document.getElementById('auth-error');
+    if (authErr) {
+      authErr.textContent = '';
+      authErr.classList.remove('hidden');
+      authErr.appendChild(card(title, [el('p', { class: 'muted', text: msg })], 'center'));
+    } else {
+      var signinMsg = document.getElementById('signin-msg');
+      if (signinMsg) signinMsg.textContent = title + ' — ' + msg;
+    }
   }
 
   // ---------- live mode ----------
@@ -843,8 +975,7 @@
       applyBootQueue(cached);
       render(cached);
     } else {
-      main.textContent = '';
-      main.appendChild(card('Loading…', [el('div', { class: 'skeleton' })]));
+      showLoading();
     }
     fetch(CFG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ idToken: idToken }), redirect: 'follow', credentials: 'omit' })
       .then(function (r) { return r.json(); })
@@ -911,6 +1042,23 @@
     };
     document.head.appendChild(s);
   }
+
+  // V5 Mobile OS Router
+  document.querySelectorAll('.nav-item').forEach(function (item) {
+    item.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (item.classList.contains('hidden')) return;
+      switchView(item.getAttribute('data-target'));
+    });
+  });
+  document.querySelectorAll('.chip').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      document.querySelectorAll('.chip').forEach(function (c) { c.classList.remove('active'); });
+      chip.classList.add('active');
+      selectedCampaign = chip.getAttribute('data-campaign') || 'ALL';
+      // Campaign-scoped re-render is deferred: queue and pace rows have no campaign field yet.
+    });
+  });
 
   purgeLegacySessionBootCache();
   if (DEMO) startDemo(); else startLive();

@@ -156,3 +156,31 @@ p.bad{color:var(--bad)}
 .q-instruct .sop{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
 .toast.undo-toast{display:flex;align-items:center;gap:10px;border-radius:12px;padding:10px 14px;bottom:18px;z-index:40}
 .undo-toast .undo-btn{border:0;background:#fff;color:#0f172a;border-radius:999px;padding:5px 10px;font-weight:700;font-size:12.5px}
+
+
+/* V5 Mobile OS Shell Additions */
+.bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--line); display: flex; justify-content: space-around; padding-bottom: env(safe-area-inset-bottom); z-index: 50; }
+.nav-item { flex: 1; text-align: center; padding: 12px 0; color: var(--muted); text-decoration: none; font-size: 11px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.nav-item.active { color: var(--brand); }
+.nav-item svg { width: 22px; height: 22px; fill: currentColor; }
+.view-container { display: none; flex: 1; overflow-y: auto; padding-bottom: calc(70px + env(safe-area-inset-bottom)); }
+.view-container.active { display: flex; flex-direction: column; gap: 12px; }
+.campaign-chips { display: flex; gap: 8px; overflow-x: auto; padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--line); scrollbar-width: none; }
+.campaign-chips::-webkit-scrollbar { display: none; }
+.chip { padding: 6px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 20px; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; color: var(--muted); }
+.chip.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+/* CSP-safe stand-ins for the drop's inline styles (style-src has no unsafe-inline) */
+.os-main, main#main { padding: 0; }
+#signin.view-container { flex: none; padding-bottom: 0; }
+#signin.view-container.active { margin: 12px; display: block; }
+.view-pad { padding: 12px; }
+button.nav-item, button.chip { font: inherit; }
+button.nav-item { background: transparent; border: 0; }
+
+/* Legacy Owner subtabs stay in the DOM for existing tests; bottom nav is the switcher */
+#owner-subtabs { display: none !important; }
+
+/* Keep toasts and the footer clear of the fixed nav */
+.foot { padding-bottom: calc(14px + 70px + env(safe-area-inset-bottom)); }
+.toast, .toast.undo-toast { bottom: calc(18px + 70px + env(safe-area-inset-bottom)); z-index: 60; }
