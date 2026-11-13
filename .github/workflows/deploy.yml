@@ -1,0 +1,67 @@
+# Verify unit tests on every push to main, then stamp a fresh
+# commit-SHA cache-buster onto docs/index.html (styles.css and app.js).
+#
+# Security (public repo):
+# - Triggers are push to main and workflow_dispatch only.
+#   No pull_request or pull_request_target (those must never see secrets).
+# - Minimal token: contents: write, only so this job can push the stamp
+#   commit. No clasp/Google credentials are used or required.
+# - The stamp commit does not include [skip ci], because that flag also
+#   skips GitHub's legacy Pages build from main /docs. Instead this
+#   workflow skips itself when the head commit is the stamp commit.
+name: Verify and Stamp Doorway Ops Frontend
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: verify-and-stamp-main
+  cancel-in-progress: false
+
+jobs:
+  verify-and-stamp:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.message, 'auto-stamp cache-buster')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Stamp cache-buster and push if needed
+        run: |
+          set -euo pipefail
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          export SHORT_SHA
+          node <<'NODE'
+          const fs = require("fs");
+          const sha = process.env.SHORT_SHA;
+          if (!/^[0-9a-f]{4,40}$/i.test(sha || "")) {
+            console.error("refusing to stamp; invalid SHORT_SHA");
+            process.exit(1);
+          }
+          let h = fs.readFileSync("docs/index.html", "utf8");
+          const next = h
+            .replace(/styles\.css(\?v=[^"']+)?/g, "styles.css?v=" + sha)
+            .replace(/app\.js(\?v=[^"']+)?/g, "app.js?v=" + sha);
+          if (next !== h) fs.writeFileSync("docs/index.html", next);
+          NODE
+          if ! git diff --quiet -- docs/index.html; then
+            git config user.name "doorway-ops-bot"
+            git config user.email "ops-bot@doorwaypartners.com"
+            git add docs/index.html
+            git commit -m "chore: auto-stamp cache-buster ?v=${SHORT_SHA}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
